@@ -1,13 +1,13 @@
-numpy>=1.20.0
+numpy>=1.21.0
 librosa>=0.9.0
 --index-url https://download.pytorch.org/whl/cu121
 torch>=1.9.0
-torchaudio>=1.9.0
-soundfile>=0.10.3
+torchaudio>=0.9.0
+soundfile>=0.10.0
 speechbrain>=0.5.12
-faiss-cpu>=1.7.2
-scikit-learn>=0.24.2
+faiss-cpu>=1.7.0
+scikit-learn>=0.24.0
 matplotlib>=3.4.0
 scipy>=1.7.0
-sounddevice>=0.4.6
+sounddevice>=0.4.0
 keyboard>=0.13.5 

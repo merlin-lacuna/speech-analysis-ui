@@ -2,7 +2,7 @@ import numpy as np
 import librosa
 import soundfile as sf
 import matplotlib.pyplot as plt
-from speech_feature_extractor import HybridFeatureExtractor
+from speech_feature_extractor import EnhancedFeatureExtractor, SpeechFeatures
 from typing import Tuple, Dict, Optional
 from dataclasses import dataclass
 
@@ -10,15 +10,19 @@ from dataclasses import dataclass
 class AnalysisResult:
     label: str
     confidence: float
-    features: Dict[str, float]
+    category_scores: Dict[str, float]
     spectrogram_path: Optional[str] = None
 
 class AudioProcessor:
     def __init__(self):
         self.sample_rate = 22050
         self.channels = 1
-        self.extractor = HybridFeatureExtractor()
-        self.extractor.load_database('emotion_database')
+        self.extractor = EnhancedFeatureExtractor()
+        try:
+            self.extractor.load_database('speech_database')
+            print("Loaded existing speech database")
+        except Exception as e:
+            print(f"No existing database found ({e}), starting fresh")
 
     def process_audio_file(self, audio_path: str, generate_spectrogram: bool = False, spectrogram_path: str = None) -> AnalysisResult:
         """Process an audio file and return analysis results"""
@@ -26,25 +30,24 @@ class AudioProcessor:
         if generate_spectrogram and spectrogram_path:
             self._generate_spectrogram(audio_path, spectrogram_path)
         
-        # Get label and confidence
-        label, confidence = self.extractor.find_closest_match(audio_path)
+        # Get label and category scores
+        label, category_scores = self.extractor.find_closest_match(audio_path)
         
-        # Get features for debugging/display
-        features = self.extractor.extract_all_features(audio_path)
-        feature_dict = {
-            f"feature_{i}": float(val) for i, val in enumerate(features)
-        }
+        # Calculate overall confidence as average of category scores
+        confidence = sum(category_scores.values()) / len(category_scores)
         
         return AnalysisResult(
             label=label,
             confidence=confidence,
-            features=feature_dict,
+            category_scores=category_scores,
             spectrogram_path=spectrogram_path if generate_spectrogram else None
         )
 
     def ingest_sample(self, audio_path: str, label: str):
         """Add a new sample to the database"""
         self.extractor.add_sample(audio_path, label)
+        # Save after each ingestion to preserve data
+        self.extractor.save_database('speech_database')
 
     def save_audio(self, audio: np.ndarray, output_path: str):
         """Save audio data to a WAV file"""

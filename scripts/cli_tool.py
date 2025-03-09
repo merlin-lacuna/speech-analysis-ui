@@ -197,7 +197,12 @@ class AudioCLI:
                 result = self.processor.process_audio_file(temp_file)
                 print(f"\nAnalysis Result:")
                 print(f"Best match: {result.label}")
-                print(f"Confidence: {result.confidence:.2%}")
+                print(f"Overall confidence: {result.confidence:.2%}")
+                print("\nDetailed Category Scores:")
+                print("-" * 30)
+                for category, score in result.category_scores.items():
+                    print(f"{category.replace('_', ' ').title()}: {score:.2%}")
+                print("-" * 30)
                 
                 # Clean up
                 os.remove(temp_file)

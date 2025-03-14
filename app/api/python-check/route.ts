@@ -1,13 +1,17 @@
 import { NextResponse } from "next/server"
 import { exec } from "child_process"
 import { promisify } from "util"
+import { join } from "path"
 
 const execPromise = promisify(exec)
 
 export async function GET() {
   try {
+    // Platform-agnostic Python command (on Windows it's usually 'python', on Linux/macOS it's often 'python3')
+    const pythonCommand = process.platform === 'win32' ? 'python' : 'python3'
+    
     // Check if Python is installed and which version
-    const { stdout: pythonVersion, stderr: pythonError } = await execPromise("python3 --version")
+    const { stdout: pythonVersion, stderr: pythonError } = await execPromise(`${pythonCommand} --version`)
 
     // Check if required packages are installed
     const checkPackages = `
@@ -25,7 +29,7 @@ except ImportError as e:
     sys.exit(1)
     `
 
-    const { stdout: packagesOutput, stderr: packagesError } = await execPromise(`python3 -c "${checkPackages}"`)
+    const { stdout: packagesOutput, stderr: packagesError } = await execPromise(`${pythonCommand} -c "${checkPackages}"`)
 
     return NextResponse.json({
       python: pythonError ? `Error: ${pythonError}` : pythonVersion.trim(),

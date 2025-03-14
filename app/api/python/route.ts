@@ -11,9 +11,12 @@ export async function POST(request: NextRequest) {
     }
 
     const scriptPath = join(process.cwd(), script)
+    
+    // Platform-agnostic Python command
+    const pythonCommand = process.platform === 'win32' ? 'python' : 'python3'
 
     return new Promise((resolve) => {
-      const process = spawn("python", [scriptPath, ...args])
+      const process = spawn(pythonCommand, [scriptPath, ...args])
 
       let stdout = ""
       let stderr = ""

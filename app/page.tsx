@@ -9,7 +9,7 @@ import Image from "next/image"
 interface EmotionAnalysis {
   emotion: string
   confidence: number
-  features: Record<string, number>
+  category_scores: Record<string, number>
 }
 
 export default function AudioRecorder() {
@@ -118,7 +118,7 @@ export default function AudioRecorder() {
       setAnalysisResult({
         emotion: data.emotion,
         confidence: data.confidence,
-        features: data.features
+        category_scores: data.category_scores
       })
       console.log("Audio analysis completed successfully:", data.message)
     } catch (error) {

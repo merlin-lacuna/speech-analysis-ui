@@ -41,9 +41,9 @@ export async function POST(request: NextRequest) {
     // Create unique filenames using OS temp directory
     const id = randomUUID()
     const tempDir = os.tmpdir()
-    const audioPath = join(tempDir, `${id}.webm`).replace(/\\/g, '/')
-    const wavPath = join(tempDir, `${id}.wav`).replace(/\\/g, '/')
-    const errorLogPath = join(tempDir, `${id}_error.log`).replace(/\\/g, '/')
+    const audioPath = join(tempDir, `${id}.webm`)
+    const wavPath = join(tempDir, `${id}.wav`)
+    const errorLogPath = join(tempDir, `${id}_error.log`)
 
     console.log("Paths:", {
       tempDir,
@@ -61,77 +61,37 @@ export async function POST(request: NextRequest) {
     // Convert WebM to WAV using ffmpeg
     try {
       console.log("Converting WebM to WAV...")
-      await execPromise(`ffmpeg -i "${audioPath}" "${wavPath}"`)
+      const ffmpegPath = process.platform === 'win32' 
+        ? 'ffmpeg' // On Windows, assumes ffmpeg is in PATH
+        : join(process.cwd(), 'bin', 'ffmpeg') // On Linux, use local binary
+      
+      await execPromise(`"${ffmpegPath}" -i "${audioPath}" "${wavPath}"`)
       console.log("Conversion successful")
     } catch (error) {
       console.error("FFmpeg conversion failed:", error)
       return NextResponse.json({ error: "Failed to convert audio format" }, { status: 500 })
     }
 
-    // Run the Python script to ingest the sample
-    const pythonScript = `
-import sys
-import traceback
-import os
-
-# Add the scripts directory to Python path
-scripts_dir = os.path.join('${process.cwd().replace(/\\/g, '/')}', 'scripts')
-sys.path.append(scripts_dir)
-
-from speech_feature_extractor import HybridFeatureExtractor
-
-try:
-    # Print debugging info
-    audio_path = '${wavPath}'  # Use the WAV file instead of WebM
-    label = '${label}'
-    database_path = os.path.join('${process.cwd().replace(/\\/g, '/')}', 'emotion_database')  # Path to our emotion database
+    // Get path to Python script and database
+    const scriptPath = join(process.cwd(), 'scripts', 'api', 'ingest_sample.py')
+    const databasePath = join(process.cwd(), 'emotion_database')
     
-    print(f"Scripts directory: {scripts_dir}")
-    print(f"Database path: {database_path}")
-    print(f"Audio file exists: {os.path.exists(audio_path)}")
-    print(f"Audio file size: {os.path.getsize(audio_path) if os.path.exists(audio_path) else 'file not found'}")
-    
-    # Initialize feature extractor
-    extractor = HybridFeatureExtractor()
-    
-    # Load existing database if it exists
-    if os.path.exists(f"{database_path}_index.faiss"):
-        print("Loading existing database...")
-        extractor.load_database(database_path)
-    
-    # Add the new sample
-    print(f"Adding sample with label: {label}")
-    extractor.add_sample(audio_path, label)
-    
-    # Save the updated database
-    print("Saving database...")
-    extractor.save_database(database_path)
-    print("Sample successfully ingested")
-
-except Exception as e:
-    error_msg = f"Error: {str(e)}\\nTraceback:\\n{traceback.format_exc()}"
-    print(error_msg)  # This will go to stderr
-    with open('${errorLogPath}', 'w') as f:
-        f.write(error_msg)
-    sys.exit(1)
-    `
-
-    // Write the Python script to a temporary file
-    const scriptPath = join(tempDir, `${id}_script.py`).replace(/\\/g, '/')
-    await writeFile(scriptPath, pythonScript)
-
-    // Execute the Python script using the venv Python path
-    const pythonPath = join(process.cwd(), 'venv', 'Scripts', 'python.exe').replace(/\\/g, '/')
+    // Execute the Python script using the venv Python path (platform-specific)
+    const pythonPath = process.platform === 'win32' 
+      ? join(process.cwd(), 'venv', 'Scripts', 'python.exe')
+      : join(process.cwd(), 'venv', 'bin', 'python')
     
     try {
-      const { stdout, stderr } = await execPromise(`"${pythonPath}" "${scriptPath}"`)
+      // Run the dedicated Python script with parameters
+      const { stdout, stderr } = await execPromise(
+        `"${pythonPath}" "${scriptPath}" "${wavPath}" "${label}" "${databasePath}" "${errorLogPath}"`
+      )
       
       // Clean up temporary files
       try {
         await Promise.all([
           unlink(audioPath),
           unlink(wavPath),
-          unlink(scriptPath),
           unlink(errorLogPath).catch(() => {})  // Error log might not exist
         ])
       } catch (error) {
@@ -152,7 +112,14 @@ except Exception as e:
 
       console.log("Python script output:", stdout)
 
-      // Return success response
+      // Parse the result from stdout
+      const resultMatch = stdout.match(/RESULT_JSON:(.+)/)
+      if (resultMatch) {
+        const result = JSON.parse(resultMatch[1])
+        return NextResponse.json(result)
+      }
+
+      // Return success response if no JSON result was found
       return NextResponse.json({
         success: true,
         message: "Sample successfully ingested",
@@ -179,4 +146,4 @@ except Exception as e:
       { status: 500 }
     )
   }
-} 
+}

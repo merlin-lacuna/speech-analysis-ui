@@ -102,10 +102,18 @@ try:
     
     # Print results as JSON for parsing
     import json
+    import numpy as np
+
+    # Convert category scores from float32 to native Python float
+    converted_scores = {
+        category: float(score) 
+        for category, score in result.category_scores.items()
+    }
+    
     print("RESULT_JSON:" + json.dumps({
         "emotion": result.label,
         "confidence": float(result.confidence),
-        "features": result.features
+        "category_scores": converted_scores
     }))
 
 except Exception as e:
@@ -165,7 +173,7 @@ except Exception as e:
         spectrogramUrl: `/spectrograms/${id}.png`,
         emotion: analysisResult.emotion,
         confidence: analysisResult.confidence,
-        features: analysisResult.features,
+        category_scores: analysisResult.category_scores,
         message: stdout,
       })
     } catch (execError) {

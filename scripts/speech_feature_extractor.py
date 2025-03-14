@@ -10,13 +10,22 @@ import torch
 import torchaudio
 from scipy.stats import skew, kurtosis
 from scipy.signal import hilbert
+import logging
 
 # Import SpeechBrain components
 import speechbrain as sb
-from speechbrain.pretrained import VAD
-from speechbrain.pretrained import EncoderClassifier
+from speechbrain.inference import VAD
+from speechbrain.inference import EncoderClassifier
 from speechbrain.lobes.features import MFCC, Fbank
-from speechbrain.processing.features import delta
+# Note: We're already using our own compute_deltas function defined below
+
+def compute_deltas(features: np.ndarray, width: int = 9) -> np.ndarray:
+    """Compute delta features from a feature matrix"""
+    padded = np.pad(features, ((0, 0), (width // 2, width // 2)), mode='edge')
+    windows = np.array([padded[:, i:i + features.shape[1]] for i in range(width)])
+    weights = np.arange(-(width // 2), (width // 2) + 1)
+    deltas = np.tensordot(windows, weights, axes=(0, 0)) / weights.dot(weights)
+    return deltas
 
 @dataclass
 class SpeechFeatures:
@@ -209,7 +218,7 @@ class LibrosaFeatureExtractor(FeatureExtractorBase):
             
             # Rhythm regularity features
             mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
-            mfcc_delta = librosa.feature.delta(mfcc)
+            mfcc_delta = compute_deltas(mfcc)  # Use our custom delta function
             
             # Process MFCC deltas to ensure 1D
             mfcc_delta_mean = np.mean(mfcc_delta, axis=1)
@@ -233,12 +242,11 @@ class LibrosaFeatureExtractor(FeatureExtractorBase):
                 np.array([float(tempo)]),  # Ensure tempo is a float
                 mfcc_delta_mean.ravel(),  # Already 1D from mean operation
                 mfcc_delta_std.ravel(),   # Already 1D from std operation
-                np.array([np.mean(np.abs(librosa.feature.delta(mfcc_delta_mean)))]),  # Overall rhythm change
+                np.array([np.mean(np.abs(compute_deltas(mfcc_delta_mean.reshape(-1, 1)).flatten()))]),  # Overall rhythm change
                 np.array([skew(mfcc_delta.ravel())])  # Overall skewness
             ]
             
             # Print shapes for debugging
-            print("\nFeature array shapes:")
             for i, arr in enumerate(feature_arrays):
                 print(f"Array {i}: shape {arr.shape}, dims {arr.ndim}")
             
@@ -653,9 +661,12 @@ class SpeechBrainFeatureExtractor(FeatureExtractorBase):
         if self.vad_model is None:
             print("Loading SpeechBrain VAD model...")
             try:
+                # Use run_opts to disable CUDA autocast which causes deprecation warnings
+                run_opts = {"device": "cpu"}  # Use CPU to avoid CUDA warnings
                 self.vad_model = VAD.from_hparams(
                     source="speechbrain/vad-crdnn-libriparty",
-                    savedir="pretrained_models/vad-crdnn-libriparty"
+                    savedir="pretrained_models/vad-crdnn-libriparty",
+                    run_opts=run_opts
                 )
                 print("VAD model loaded successfully")
             except Exception as e:
@@ -666,9 +677,12 @@ class SpeechBrainFeatureExtractor(FeatureExtractorBase):
         if self.encoder is None:
             print("Loading SpeechBrain speech encoder...")
             try:
+                # Use run_opts to disable CUDA autocast which causes deprecation warnings
+                run_opts = {"device": "cpu"}  # Use CPU to avoid CUDA warnings
                 self.encoder = EncoderClassifier.from_hparams(
                     source="speechbrain/spkrec-ecapa-voxceleb",
-                    savedir="pretrained_models/spkrec-ecapa-voxceleb"
+                    savedir="pretrained_models/spkrec-ecapa-voxceleb",
+                    run_opts=run_opts
                 )
                 print("Speech encoder loaded successfully")
             except Exception as e:
@@ -712,13 +726,14 @@ class SpeechBrainFeatureExtractor(FeatureExtractorBase):
             mfcc_features = self.mfcc_computer(waveform)
             
             # Compute delta and delta-delta features
-            delta_features = delta(mfcc_features)
-            delta_delta_features = delta(delta_features)
+            mfcc_np = mfcc_features.squeeze().numpy()
+            delta_features = compute_deltas(mfcc_np)
+            delta_delta_features = compute_deltas(delta_features)
             
             # Convert to numpy
             mfcc_np = mfcc_features.squeeze().numpy()
-            delta_np = delta_features.squeeze().numpy()
-            delta_delta_np = delta_delta_features.squeeze().numpy()
+            delta_np = delta_features
+            delta_delta_np = delta_delta_features
             
             # Compute statistics across time
             mfcc_mean = np.mean(mfcc_np, axis=1)
@@ -756,11 +771,7 @@ class SpeechBrainFeatureExtractor(FeatureExtractorBase):
             # Convert to numpy for processing
             y_np = waveform.squeeze().numpy()
             
-            # Neural VAD for energy analysis
-            speech_prob = self.vad_model.get_speech_prob(waveform)
-            speech_prob_np = speech_prob.numpy()
-            
-            # Frame-wise RMS energy
+            # Frame-wise RMS energy (always compute this as backup)
             frame_length = int(sr * 0.025)  # 25ms frame
             hop_length = int(sr * 0.010)    # 10ms hop
             energy = np.array([
@@ -768,13 +779,30 @@ class SpeechBrainFeatureExtractor(FeatureExtractorBase):
                 for i in range(0, len(y_np) - frame_length, hop_length)
             ])
             
-            # Align lengths
-            min_len = min(len(energy), len(speech_prob_np))
-            energy = energy[:min_len]
-            speech_prob_np = speech_prob_np[:min_len]
-            
-            # Weight energy by speech probability
-            weighted_energy = energy * speech_prob_np
+            try:
+                # Try to use VAD if available
+                if self.vad_model is not None:
+                    speech_prob = self.vad_model.get_speech_prob(waveform)
+                    speech_prob_np = speech_prob.numpy()
+                    
+                    # Align lengths
+                    min_len = min(len(energy), len(speech_prob_np))
+                    energy = energy[:min_len]
+                    speech_prob_np = speech_prob_np[:min_len]
+                    
+                    # Weight energy by speech probability
+                    weighted_energy = energy * speech_prob_np
+                else:
+                    # Fallback: use simple amplitude thresholding
+                    threshold = np.mean(energy) * 0.1
+                    speech_prob_np = (energy > threshold).astype(np.float32)
+                    weighted_energy = energy
+            except Exception as e:
+                logging.warning(f"VAD failed, using fallback: {e}")
+                # Fallback: use simple amplitude thresholding
+                threshold = np.mean(energy) * 0.1
+                speech_prob_np = (energy > threshold).astype(np.float32)
+                weighted_energy = energy
             
             # Compute statistics
             features = np.array([
@@ -788,6 +816,10 @@ class SpeechBrainFeatureExtractor(FeatureExtractorBase):
                 kurtosis(energy)
             ])
             
+            # Normalize features to be between 0 and 1
+            features = np.clip(features, -100, 100)  # Clip extreme values
+            features = (features - features.min()) / (features.max() - features.min() + 1e-6)
+            
             # Pad or truncate to match expected dimension
             if len(features) < self.feature_dims['energy']:
                 features = np.pad(features, (0, self.feature_dims['energy'] - len(features)))
@@ -796,9 +828,8 @@ class SpeechBrainFeatureExtractor(FeatureExtractorBase):
                 
             return features.astype(np.float32)
         except Exception as e:
-            print(f"Error in energy features: {str(e)}")
-            # Return zeros as fallback
-            return np.zeros(self.feature_dims['energy'], dtype=np.float32)
+            logging.error(f"Error in energy features: {e}")
+            raise
     
     def extract_pitch_features(self, waveform: torch.Tensor, sr: int) -> np.ndarray:
         """Extract pitch features using SpeechBrain encoder embeddings"""
@@ -823,15 +854,38 @@ class SpeechBrainFeatureExtractor(FeatureExtractorBase):
             return np.zeros(self.feature_dims['pitch'], dtype=np.float32)
     
     def extract_pause_features(self, waveform: torch.Tensor, sr: int) -> np.ndarray:
-        """Extract pause features using SpeechBrain VAD"""
+        """Extract pause features using VAD or energy-based detection"""
         try:
-            # Use VAD to detect speech/pause boundaries
-            speech_prob = self.vad_model.get_speech_prob(waveform)
-            speech_prob_np = speech_prob.numpy()
+            # Convert to numpy for processing
+            y_np = waveform.squeeze().numpy()
             
-            # Threshold for considering a frame as speech
-            speech_threshold = 0.5
-            is_speech = speech_prob_np > speech_threshold
+            try:
+                # Try to use VAD if available
+                if self.vad_model is not None:
+                    speech_prob = self.vad_model.get_speech_prob(waveform)
+                    speech_prob_np = speech_prob.numpy()
+                    is_speech = speech_prob_np > 0.5
+                else:
+                    # Fallback: use energy-based detection
+                    frame_length = int(sr * 0.025)
+                    hop_length = int(sr * 0.010)
+                    energy = np.array([
+                        np.sqrt(np.mean(y_np[i:i+frame_length]**2))
+                        for i in range(0, len(y_np) - frame_length, hop_length)
+                    ])
+                    threshold = np.mean(energy) * 0.1
+                    is_speech = energy > threshold
+            except Exception as e:
+                logging.warning(f"VAD failed, using energy-based detection: {e}")
+                # Fallback: use energy-based detection
+                frame_length = int(sr * 0.025)
+                hop_length = int(sr * 0.010)
+                energy = np.array([
+                    np.sqrt(np.mean(y_np[i:i+frame_length]**2))
+                    for i in range(0, len(y_np) - frame_length, hop_length)
+                ])
+                threshold = np.mean(energy) * 0.1
+                is_speech = energy > threshold
             
             # Calculate pause statistics
             pause_lengths = []
@@ -859,7 +913,11 @@ class SpeechBrainFeatureExtractor(FeatureExtractorBase):
                     float(np.max(pause_lengths)) if len(pause_lengths) > 0 else 0.0,  # Longest pause
                 ], dtype=np.float32)
             else:
-                features = np.zeros(5, dtype=np.float32)
+                features = np.array([0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+            
+            # Normalize features to be between 0 and 1
+            if not np.all(features == 0):
+                features = (features - features.min()) / (features.max() - features.min())
             
             # Pad to match expected dimension
             if len(features) < self.feature_dims['pause']:
@@ -869,9 +927,8 @@ class SpeechBrainFeatureExtractor(FeatureExtractorBase):
             
             return features
         except Exception as e:
-            print(f"Error in pause features: {str(e)}")
-            # Return zero features as fallback
-            return np.zeros(self.feature_dims['pause'], dtype=np.float32)
+            logging.error(f"Error in pause features: {e}")
+            raise
     
     def extract_voice_quality_features(self, waveform: torch.Tensor, sr: int) -> np.ndarray:
         """Extract voice quality features using MFCC statistics"""
@@ -904,43 +961,80 @@ class SpeechBrainFeatureExtractor(FeatureExtractorBase):
             return np.zeros(self.feature_dims['voice_quality'], dtype=np.float32)
     
     def extract_speech_rate_features(self, waveform: torch.Tensor, sr: int) -> np.ndarray:
-        """Extract speech rate features using delta-delta coefficients"""
+        """Extract speech rate features using either MFCC or envelope-based analysis"""
         try:
-            # Compute MFCCs
-            mfcc_features = self.mfcc_computer(waveform)
+            # Try MFCC-based approach first
+            try:
+                if self.mfcc_computer is not None:
+                    mfcc_features = self.mfcc_computer(waveform)
+                    mfcc_np = mfcc_features.squeeze().numpy()
+                    
+                    # Compute delta and delta-delta features
+                    delta_features = compute_deltas(mfcc_np)
+                    delta_delta_features = compute_deltas(delta_features)
+                    
+                    # Compute statistics
+                    delta_mean = np.mean(np.abs(delta_features), axis=1)
+                    delta_std = np.std(delta_features, axis=1)
+                    delta_delta_mean = np.mean(np.abs(delta_delta_features), axis=1)
+                    delta_delta_std = np.std(delta_delta_features, axis=1)
+                    
+                    # Take first 5 coefficients of each statistic
+                    features = np.concatenate([
+                        delta_mean[:5],      # Speed features
+                        delta_std[:5],       # Speed variation
+                        delta_delta_mean[:5], # Acceleration features
+                        delta_delta_std[:5]   # Acceleration variation
+                    ])
+                else:
+                    raise ValueError("MFCC computer not available")
+            except Exception as e:
+                logging.warning(f"MFCC-based rate extraction failed, using envelope-based: {e}")
+                # Fallback: Use envelope-based analysis
+                y_np = waveform.squeeze().numpy()
+                
+                # Compute envelope
+                envelope = np.abs(hilbert(y_np))
+                
+                # Compute frame-wise energy
+                frame_length = int(sr * 0.025)  # 25ms frames
+                hop_length = int(sr * 0.010)    # 10ms hop
+                frames = range(0, len(envelope) - frame_length, hop_length)
+                frame_energies = np.array([
+                    np.mean(envelope[i:i+frame_length]**2)
+                    for i in frames
+                ])
+                
+                # Compute rate features
+                energy_diff = np.diff(frame_energies)
+                energy_accel = np.diff(energy_diff)
+                
+                features = np.array([
+                    np.mean(np.abs(energy_diff)),     # Average rate of energy change
+                    np.std(energy_diff),              # Variation in rate
+                    np.mean(np.abs(energy_accel)),    # Average acceleration
+                    np.std(energy_accel),             # Variation in acceleration
+                    np.percentile(np.abs(energy_diff), 90)  # Peak rate
+                ])
+                
+                # Repeat features to match expected size
+                features = np.tile(features, 4)[:20]
             
-            # Compute delta and delta-delta features
-            delta_features = delta(mfcc_features)
-            delta_delta_features = delta(delta_features)
-            
-            # Convert to numpy
-            delta_np = delta_features.squeeze().numpy()
-            delta_delta_np = delta_delta_features.squeeze().numpy()
-            
-            # Compute statistics
-            delta_mean = np.mean(np.abs(delta_np), axis=1)[:5]  # Speed
-            delta_std = np.std(delta_np, axis=1)[:5]            # Variation in speed
-            delta_delta_mean = np.mean(np.abs(delta_delta_np), axis=1)[:5]  # Acceleration
-            delta_delta_std = np.std(delta_delta_np, axis=1)[:5]            # Variation in acceleration
-            
-            # Create feature arrays
-            features = np.concatenate([
-                delta_mean,
-                delta_std,
-                delta_delta_mean,
-                delta_delta_std
-            ])
+            # Normalize features to be between 0 and 1
+            features = np.clip(features, -100, 100)  # Clip extreme values
+            if not np.all(features == 0):
+                features = (features - features.min()) / (features.max() - features.min())
             
             # Pad or truncate to match expected dimension
             if len(features) < self.feature_dims['speech_rate']:
                 features = np.pad(features, (0, self.feature_dims['speech_rate'] - len(features)))
             else:
                 features = features[:self.feature_dims['speech_rate']]
-                
+            
             return features.astype(np.float32)
         except Exception as e:
-            print(f"Error in speech rate features: {str(e)}")
-            return np.zeros(self.feature_dims['speech_rate'], dtype=np.float32)
+            logging.error(f"Error in speech rate features: {e}")
+            raise
 
 
 # Define a hybrid extractor that combines both approaches

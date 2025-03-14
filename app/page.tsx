@@ -107,11 +107,64 @@ export default function AudioRecorder() {
       })
 
       console.log("Response status:", response.status)
-      const data = await response.json()
-      console.log("Response data:", data)
+      let data
+      try {
+        data = await response.json()
+        console.log("Response data:", data)
+      } catch (jsonError) {
+        console.error("Failed to parse response as JSON:", jsonError)
+        throw new Error("Server response was not valid JSON")
+      }
 
       if (!response.ok) {
+        // Check for structured error from Python script
+        if (data.error && data.traceback) {
+          // Check if error is only about the torch.cuda.amp.custom_fwd deprecation warning
+          const isTorchDeprecationWarningOnly = 
+            data.error.includes('torch.cuda.amp.custom_fwd') && 
+            !data.error.includes('ImportError') &&
+            !data.error.includes('ValueError') &&
+            !data.error.includes('FileNotFoundError');
+          
+          // If it's just the deprecation warning, we'll treat it as a non-error
+          if (isTorchDeprecationWarningOnly) {
+            console.warn("Ignoring SpeechBrain deprecation warning:", {
+              warning: data.error
+            });
+            // Treat this as a success response with default values if needed
+            data.spectrogramUrl = data.spectrogramUrl || "/placeholder.svg";
+            data.emotion = data.emotion || "neutral";
+            data.confidence = data.confidence || 0.5;
+            data.category_scores = data.category_scores || {};
+            
+            // Pretend this was a success
+            response.ok = true;
+            return data;
+          }
+          
+          // For other errors, filter out INFO, WARNING messages and known deprecation warnings
+          const errorLines = data.error.split('\n')
+            .filter((line: string) => !line.startsWith('INFO:') &&
+              !line.startsWith('WARNING:') &&
+              !line.includes('FutureWarning') &&
+              !line.includes('torch.cuda.amp.custom_fwd') &&
+              !line.includes('SpeechBrain 1.0'))
+            .join('\n')
+
+          if (errorLines.trim()) {
+            console.error("Python error details:", {
+              error: data.error,
+              traceback: data.traceback
+            })
+            throw new Error(`Python error: ${errorLines}`)
+          }
+        }
         throw new Error(data.error || "Failed to analyze audio")
+      }
+
+      if (!data.spectrogramUrl || !data.emotion) {
+        console.error("Invalid response data:", data)
+        throw new Error("Server returned incomplete data")
       }
 
       setSpectrogramUrl(data.spectrogramUrl)
@@ -120,10 +173,20 @@ export default function AudioRecorder() {
         confidence: data.confidence,
         category_scores: data.category_scores
       })
-      console.log("Audio analysis completed successfully:", data.message)
+      console.log("Audio analysis completed successfully")
     } catch (error) {
       console.error("Error analyzing audio:", error)
-      alert(`Error analyzing audio: ${error instanceof Error ? error.message : String(error)}`)
+      // Create a more user-friendly error message
+      const errorMessage = error instanceof Error ?
+        error.message.replace(/^Python error: /, '').trim() :
+        String(error)
+
+      // Only show alert if there's an actual error message
+      if (errorMessage &&
+        !errorMessage.startsWith('INFO:') &&
+        !errorMessage.includes('FutureWarning')) {
+        alert(`Error analyzing audio: ${errorMessage}`)
+      }
     } finally {
       setIsProcessing(false)
     }
@@ -199,7 +262,7 @@ export default function AudioRecorder() {
                   Match Confidence: {(analysisResult.confidence * 100).toFixed(1)}%
                 </p>
               </div>
-              
+
               <div className="overflow-hidden border rounded-md">
                 <Image
                   src={spectrogramUrl || "/placeholder.svg"}

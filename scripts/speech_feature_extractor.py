@@ -70,34 +70,99 @@ class FeatureExtractorBase:
     
     def add_sample(self, audio_path: str, label: str):
         """Add a labeled sample to the database"""
-        features = self.extract_all_features(audio_path)
-        
-        # Add features to respective indices
+        try:
+            # Extract features
+            features = self.extract_all_features(audio_path)
+            
+            # Track successful additions
+            successful_additions = []
+            
+            # Add features to respective indices
+            for category, index in self.indices.items():
+                try:
+                    category_features = getattr(features, f"{category}_features")
+                    
+                    # Ensure features are properly shaped
+                    features_reshaped = category_features.reshape(1, -1).astype(np.float32)
+                    
+                    # Handle NaN values
+                    if np.any(np.isnan(features_reshaped)):
+                        logging.warning(f"NaN values detected in {category} features")
+                        # Instead of replacing with zeros, skip this category
+                        continue
+                    
+                    # Normalize features using the scaler
+                    if len(self.labels) > 0:  # If we have existing samples
+                        # Partial fit to update scaler with new data
+                        self.scalers[category].partial_fit(features_reshaped)
+                    else:  # First sample
+                        self.scalers[category].fit(features_reshaped)
+                    
+                    # Transform features using the fitted scaler
+                    features_normalized = self.scalers[category].transform(features_reshaped)
+                    
+                    # Verify the normalized features
+                    if np.any(np.isnan(features_normalized)) or np.any(np.isinf(features_normalized)):
+                        logging.warning(f"Invalid values after normalization in {category} features")
+                        continue
+                    
+                    # Add to index
+                    index.add(features_normalized)
+                    successful_additions.append(category)
+                    
+                except Exception as e:
+                    logging.error(f"Error adding {category} features: {str(e)}")
+                    continue
+            
+            # Only proceed if we successfully added at least some features
+            if not successful_additions:
+                raise ValueError("Failed to add features for any category")
+            
+            # Store label
+            self.labels.append(label)
+            if label not in self.label_to_idx:
+                self.label_to_idx[label] = len(self.label_to_idx)
+            
+            # Save after successful ingestion
+            try:
+                self.save_database('speech_database')
+                logging.info(f"Successfully added and saved sample with label: {label}")
+                logging.info(f"Successfully processed categories: {', '.join(successful_additions)}")
+            except Exception as e:
+                logging.error(f"Error saving database: {str(e)}")
+                # If we can't save, we should remove the sample we just added
+                self._remove_last_sample()
+                raise
+                
+        except Exception as e:
+            logging.error(f"Error in sample addition: {str(e)}")
+            raise
+
+    def _remove_last_sample(self):
+        """Remove the last added sample from all indices"""
+        if not self.labels:
+            return
+            
+        # Remove from each index
         for category, index in self.indices.items():
             try:
-                category_features = getattr(features, f"{category}_features")
-                # Ensure features are properly shaped for FAISS
-                features_reshaped = category_features.reshape(1, -1).astype(np.float32)
-                if np.any(np.isnan(features_reshaped)):
-                    print(f"Warning: NaN values in {category} features, replacing with zeros")
-                    features_reshaped = np.nan_to_num(features_reshaped, 0.0)
-                index.add(features_reshaped)
+                # FAISS doesn't support direct removal, so we need to rebuild the index
+                if index.ntotal > 1:
+                    # Get all vectors except the last one
+                    all_vectors = index.reconstruct_n(0, index.ntotal - 1)
+                    
+                    # Create new index
+                    new_index = faiss.IndexFlatL2(self.feature_dims[category])
+                    new_index.add(all_vectors)
+                    
+                    # Replace old index
+                    self.indices[category] = new_index
             except Exception as e:
-                print(f"Warning: Error adding {category} features: {str(e)}")
-                continue
+                logging.error(f"Error removing last sample from {category} index: {str(e)}")
         
-        # Store label
-        self.labels.append(label)
-        if label not in self.label_to_idx:
-            self.label_to_idx[label] = len(self.label_to_idx)
-        
-        # Save after each ingestion to preserve data
-        try:
-            self.save_database('speech_database')
-            print(f"Successfully added and saved sample with label: {label}")
-        except Exception as e:
-            print(f"Warning: Error saving database: {str(e)}")
-    
+        # Remove last label
+        self.labels.pop()
+
     def find_closest_match(self, audio_path: str) -> Tuple[str, Dict[str, float]]:
         """Find the closest matching sample with detailed category scores"""
         # Extract features from input
@@ -105,46 +170,75 @@ class FeatureExtractorBase:
         
         # Check if we have any samples in the database
         if not self.labels:
-            print("No samples in database yet. Please add some samples first.")
+            logging.warning("No samples in database yet. Please add some samples first.")
             return "no_samples", {category: 0.0 for category in self.feature_dims.keys()}
         
         # Calculate similarity scores for each category
         category_scores = {}
         overall_confidence = 0.0
+        valid_categories = 0
         
         for category, index in self.indices.items():
-            category_features = getattr(features, f"{category}_features")
             try:
-                D, I = index.search(category_features.reshape(1, -1), k=min(2, len(self.labels)))
+                category_features = getattr(features, f"{category}_features")
+                features_reshaped = category_features.reshape(1, -1).astype(np.float32)
+                
+                # Skip if features contain NaN
+                if np.any(np.isnan(features_reshaped)):
+                    logging.warning(f"NaN values in {category} features, skipping")
+                    category_scores[category] = 0.0
+                    continue
+                
+                # Normalize using the same scaler used during training
+                features_normalized = self.scalers[category].transform(features_reshaped)
+                
+                # Skip if normalization produced invalid values
+                if np.any(np.isnan(features_normalized)) or np.any(np.isinf(features_normalized)):
+                    logging.warning(f"Invalid values after normalization in {category} features")
+                    category_scores[category] = 0.0
+                    continue
+                
+                # Search in the index
+                D, I = index.search(features_normalized, k=min(2, len(self.labels)))
                 
                 # Calculate confidence score for this category
                 if len(D[0]) > 1:
                     best_distance = D[0][0]
                     second_best_distance = D[0][1]
-                    confidence = 1.0 - (best_distance / (second_best_distance + 1e-6))  # Avoid division by zero
+                    confidence = 1.0 - (best_distance / (second_best_distance + 1e-6))
                     confidence = max(0.0, min(1.0, confidence * 1.5))
                 else:
                     confidence = max(0.0, min(1.0, 1.0 - D[0][0] / 1000.0))
                 
                 category_scores[category] = confidence
                 overall_confidence += confidence
+                valid_categories += 1
+                
             except Exception as e:
-                print(f"Warning: Error calculating {category} score: {str(e)}")
+                logging.error(f"Error calculating {category} score: {str(e)}")
                 category_scores[category] = 0.0
         
-        # Average the confidence scores
-        overall_confidence /= len(self.indices)
+        # Average the confidence scores only for valid categories
+        if valid_categories > 0:
+            overall_confidence /= valid_categories
+        else:
+            logging.warning("No valid categories found for matching")
+            return "unknown", category_scores
         
-        # Get the most common label from all categories
+        # Get the most common label from valid categories
         label_votes = {}
         for category, index in self.indices.items():
             try:
-                category_features = getattr(features, f"{category}_features")
-                _, I = index.search(category_features.reshape(1, -1), k=1)
-                voted_label = self.labels[I[0][0]]
-                label_votes[voted_label] = label_votes.get(voted_label, 0) + 1
+                if category_scores[category] > 0.0:  # Only consider categories with valid scores
+                    category_features = getattr(features, f"{category}_features")
+                    features_normalized = self.scalers[category].transform(
+                        category_features.reshape(1, -1).astype(np.float32)
+                    )
+                    _, I = index.search(features_normalized, k=1)
+                    voted_label = self.labels[I[0][0]]
+                    label_votes[voted_label] = label_votes.get(voted_label, 0) + 1
             except Exception as e:
-                print(f"Warning: Error getting label for {category}: {str(e)}")
+                logging.error(f"Error getting label for {category}: {str(e)}")
                 continue
         
         if label_votes:
@@ -153,7 +247,7 @@ class FeatureExtractorBase:
             closest_label = "unknown"
         
         return closest_label, category_scores
-        
+
     def save_database(self, path: str):
         """Save the feature database and labels"""
         # Save FAISS indices
@@ -166,6 +260,21 @@ class FeatureExtractorBase:
                 'labels': self.labels,
                 'label_to_idx': self.label_to_idx
             }, f)
+        
+        # Save fitted scalers
+        scaler_data = {}
+        for category, scaler in self.scalers.items():
+            if hasattr(scaler, 'mean_') and hasattr(scaler, 'scale_'):
+                scaler_data[category] = {
+                    'mean': scaler.mean_.tolist() if scaler.mean_ is not None else None,
+                    'scale': scaler.scale_.tolist() if scaler.scale_ is not None else None,
+                    'var': scaler.var_.tolist() if hasattr(scaler, 'var_') and scaler.var_ is not None else None,
+                    'n_samples_seen': int(scaler.n_samples_seen_) if hasattr(scaler, 'n_samples_seen_') else 0
+                }
+        
+        if scaler_data:
+            with open(f"{path}_scalers.json", 'w') as f:
+                json.dump(scaler_data, f)
 
     def load_database(self, path: str):
         """Load a saved feature database and labels"""
@@ -178,6 +287,34 @@ class FeatureExtractorBase:
             data = json.load(f)
             self.labels = data['labels']
             self.label_to_idx = data['label_to_idx']
+        
+        # Load fitted scalers if they exist
+        scaler_path = f"{path}_scalers.json"
+        if os.path.exists(scaler_path):
+            with open(scaler_path, 'r') as f:
+                scaler_data = json.load(f)
+                
+            for category, data in scaler_data.items():
+                if category in self.scalers:
+                    scaler = self.scalers[category]
+                    if data['mean'] is not None:
+                        scaler.mean_ = np.array(data['mean'])
+                    if data['scale'] is not None:
+                        scaler.scale_ = np.array(data['scale'])
+                    if data['var'] is not None:
+                        scaler.var_ = np.array(data['var'])
+                    if data['n_samples_seen'] > 0:
+                        scaler.n_samples_seen_ = data['n_samples_seen']
+        else:
+            # Initialize scalers with identity transformation if no saved data
+            logging.warning("No saved scaler data found, initializing with identity transformation")
+            for category in self.feature_dims.keys():
+                scaler = self.scalers[category]
+                dim = self.feature_dims[category]
+                scaler.mean_ = np.zeros(dim)
+                scaler.scale_ = np.ones(dim)
+                scaler.var_ = np.ones(dim)
+                scaler.n_samples_seen_ = 1
 
 class LibrosaFeatureExtractor(FeatureExtractorBase):
     """Traditional signal processing approach using librosa"""

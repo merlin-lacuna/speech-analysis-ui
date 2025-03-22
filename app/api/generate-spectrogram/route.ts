@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { writeFile, mkdir, readFile, unlink } from "fs/promises"
+import { writeFile, mkdir, readFile, unlink, rename } from "fs/promises"
 import { join } from "path"
 import { randomUUID } from "crypto"
 import { exec } from "child_process"
@@ -25,6 +25,9 @@ export async function POST(request: NextRequest) {
     const formData = await request.formData()
     const audioFile = formData.get("audio") as File
 
+    // Determine if this is a training sample based on the URL path
+    const isTrainingSample = request.url.includes('/api/ingest')
+
     if (!audioFile) {
       console.error("No audio file provided")
       return NextResponse.json({ error: "No audio file provided" }, { status: 400 })
@@ -33,29 +36,40 @@ export async function POST(request: NextRequest) {
     console.log("Audio file received:", {
       name: audioFile.name,
       type: audioFile.type,
-      size: audioFile.size
+      size: audioFile.size,
+      isTrainingSample
     })
 
-    // Create unique filenames using OS temp directory
+    // Create unique filenames
     const id = randomUUID()
-    const tempDir = os.tmpdir()
-    const audioPath = join(tempDir, `${id}.webm`)
-    const wavPath = join(tempDir, `${id}.wav`)
-    const errorLogPath = join(tempDir, `${id}_error.log`)
+    const publicDir = join(process.cwd(), "public")
+
+    // Use different root folders for user recordings vs training samples
+    const rootStorageDir = isTrainingSample ?
+      join(publicDir, "training_samples") :
+      join(publicDir, "user_recordings")
+
+    const pendingDir = join(rootStorageDir, "pending")
+    const spectrogramsDir = join(publicDir, "spectrograms")
+
+    // Ensure directories exist
+    await ensureDir(rootStorageDir)
+    await ensureDir(pendingDir)
+    await ensureDir(spectrogramsDir)
+
+    // Create temporary paths
+    const audioPath = join(pendingDir, `${id}.webm`)
+    const wavPath = join(pendingDir, `${id}.wav`)
+    const errorLogPath = join(pendingDir, `${id}_error.log`)
+    const publicSpectrogramPath = join(spectrogramsDir, `${id}.png`)
 
     console.log("Paths:", {
-      tempDir,
+      rootStorageDir,
+      pendingDir,
       audioPath,
       wavPath,
       errorLogPath
     })
-
-    // Create public directory for spectrograms if it doesn't exist
-    const publicDir = join(process.cwd(), "public")
-    const spectrogramsDir = join(publicDir, "spectrograms")
-    await ensureDir(spectrogramsDir)
-
-    const publicSpectrogramPath = join(spectrogramsDir, `${id}.png`)
 
     // Write the audio file to disk
     const audioBuffer = Buffer.from(await audioFile.arrayBuffer())
@@ -66,10 +80,10 @@ export async function POST(request: NextRequest) {
     // Convert WebM to WAV using ffmpeg
     try {
       console.log("Converting WebM to WAV...")
-      const ffmpegPath = process.platform === 'win32' 
+      const ffmpegPath = process.platform === 'win32'
         ? 'ffmpeg' // On Windows, assumes ffmpeg is in PATH
         : join(process.cwd(), 'bin', 'ffmpeg') // On Linux, use local binary
-      
+
       await execPromise(`"${ffmpegPath}" -i "${audioPath}" "${wavPath}"`)
       console.log("Conversion successful")
     } catch (error) {
@@ -79,49 +93,17 @@ export async function POST(request: NextRequest) {
 
     // Get path to Python script
     const scriptPath = join(process.cwd(), 'scripts', 'api', 'generate_spectrogram.py')
-    
+
     // Execute the Python script using the venv Python path (platform-specific)
-    const pythonPath = process.platform === 'win32' 
+    const pythonPath = process.platform === 'win32'
       ? join(process.cwd(), 'venv', 'Scripts', 'python.exe')
       : join(process.cwd(), 'venv', 'bin', 'python')
-    
+
     try {
       // Run the dedicated Python script with parameters
       const { stdout, stderr } = await execPromise(
         `"${pythonPath}" "${scriptPath}" "${wavPath}" "${publicSpectrogramPath}" "${errorLogPath}"`
       )
-      
-      // Clean up temporary files
-      try {
-        await Promise.all([
-          unlink(audioPath),
-          unlink(wavPath),
-          unlink(errorLogPath).catch(() => {})  // Error log might not exist
-        ])
-      } catch (error) {
-        console.warn("Failed to clean up some temporary files:", error)
-      }
-      
-      // Check for error log
-      if (existsSync(errorLogPath)) {
-        const errorLog = await readFile(errorLogPath, 'utf8')
-        console.error("Python error log:", errorLog)
-        return NextResponse.json({ error: `Python error: ${errorLog}` }, { status: 500 })
-      }
-
-      if (stderr) {
-        // Ignore known deprecation warnings about torch.cuda.amp.custom_fwd 
-        if (stderr.includes('torch.cuda.amp.custom_fwd') && 
-            !stderr.includes('ImportError') && 
-            !stderr.includes('FileNotFoundError')) {
-          console.warn("Ignoring SpeechBrain deprecation warning in stderr:", stderr)
-        } else {
-          console.error("Python script stderr:", stderr)
-          return NextResponse.json({ error: `Python error: ${stderr}` }, { status: 500 })
-        }
-      }
-
-      console.log("Python script output:", stdout)
 
       // Parse the emotion analysis results from stdout
       const resultMatch = stdout.match(/RESULT_JSON:(.+)/)
@@ -130,60 +112,105 @@ export async function POST(request: NextRequest) {
       }
 
       const analysisResult = JSON.parse(resultMatch[1])
+      const emotion = analysisResult.emotion
+
+      // Move audio files to emotion-specific folder if we got a valid emotion
+      if (emotion && emotion !== "unknown") {
+        const emotionDir = join(rootStorageDir, emotion)
+        await ensureDir(emotionDir)
+
+        // Move both WebM and WAV files
+        const finalWebmPath = join(emotionDir, `${id}.webm`)
+        const finalWavPath = join(emotionDir, `${id}.wav`)
+
+        await Promise.all([
+          rename(audioPath, finalWebmPath),
+          rename(wavPath, finalWavPath)
+        ])
+
+        console.log(`Moved audio files to ${emotion} folder`)
+
+        // Update the paths in the result using the correct root folder
+        const relativePath = isTrainingSample ?
+          `/training_samples/${emotion}/${id}.wav` :
+          `/user_recordings/${emotion}/${id}.wav`
+        analysisResult.audioPath = relativePath
+      } else {
+        // If unknown emotion, still keep the files but in an 'unknown' folder
+        const unknownDir = join(rootStorageDir, 'unknown')
+        await ensureDir(unknownDir)
+
+        const finalWebmPath = join(unknownDir, `${id}.webm`)
+        const finalWavPath = join(unknownDir, `${id}.wav`)
+
+        await Promise.all([
+          rename(audioPath, finalWebmPath),
+          rename(wavPath, finalWavPath)
+        ])
+
+        // Use the correct root folder in the path
+        const relativePath = isTrainingSample ?
+          `/training_samples/unknown/${id}.wav` :
+          `/user_recordings/unknown/${id}.wav`
+        analysisResult.audioPath = relativePath
+      }
+
+      // Clean up error log if it exists
+      try {
+        await unlink(errorLogPath)
+      } catch (error) {
+        // Ignore if error log doesn't exist
+      }
 
       // Return both the spectrogram URL and emotion analysis
       return NextResponse.json({
-        spectrogramUrl: `/spectrograms/${id}.png`,
-        emotion: analysisResult.emotion,
-        confidence: analysisResult.confidence,
-        category_scores: analysisResult.category_scores,
-        message: stdout,
+        ...analysisResult,
+        spectrogramUrl: `/spectrograms/${id}.png`
       })
     } catch (execError) {
       // Check if error is just the torch deprecation warning
       const errorStr = String(execError);
-      const isOnlyDeprecationWarning = 
-        errorStr.includes('torch.cuda.amp.custom_fwd') && 
-        !errorStr.includes('ImportError') && 
+      const isOnlyDeprecationWarning =
+        errorStr.includes('torch.cuda.amp.custom_fwd') &&
+        !errorStr.includes('ImportError') &&
         !errorStr.includes('FileNotFoundError');
 
       if (isOnlyDeprecationWarning) {
         console.warn("Ignoring SpeechBrain deprecation warning in execError:", errorStr);
+        // Move files to unknown folder since we're returning neutral
+        const unknownDir = join(rootStorageDir, 'unknown')
+        await ensureDir(unknownDir)
+
+        const finalWebmPath = join(unknownDir, `${id}.webm`)
+        const finalWavPath = join(unknownDir, `${id}.wav`)
+
+        await Promise.all([
+          rename(audioPath, finalWebmPath),
+          rename(wavPath, finalWavPath)
+        ])
+
+        // Use the correct root folder in the path
+        const relativePath = isTrainingSample ?
+          `/training_samples/unknown/${id}.wav` :
+          `/user_recordings/unknown/${id}.wav`
+
         // Return a successful response with placeholder data
         return NextResponse.json({
           spectrogramUrl: `/placeholder.svg`,
           emotion: "neutral",
           confidence: 0.5,
           category_scores: {
-            rhythm: 0.5, energy: 0.5, pitch: 0.5, 
+            rhythm: 0.5, energy: 0.5, pitch: 0.5,
             pause: 0.5, voice_quality: 0.5, speech_rate: 0.5
           },
-          message: "Processed with warnings (ignorable)"
+          message: "Processed with warnings (ignorable)",
+          audioPath: relativePath
         });
       }
-      
+
       // Check for error log even in case of execution error
       if (existsSync(errorLogPath)) {
         const errorLog = await readFile(errorLogPath, 'utf8')
-        
-        // Check if error log only contains deprecation warnings
-        if (errorLog.includes('torch.cuda.amp.custom_fwd') && 
-            !errorLog.includes('ImportError') && 
-            !errorLog.includes('FileNotFoundError')) {
-          console.warn("Ignoring SpeechBrain deprecation warning in error log:", errorLog);
-          // Return a successful response with placeholder data
-          return NextResponse.json({
-            spectrogramUrl: `/placeholder.svg`,
-            emotion: "neutral",
-            confidence: 0.5,
-            category_scores: {
-              rhythm: 0.5, energy: 0.5, pitch: 0.5, 
-              pause: 0.5, voice_quality: 0.5, speech_rate: 0.5
-            },
-            message: "Processed with warnings (ignorable)"
-          });
-        }
-        
         console.error("Python error log:", errorLog)
         return NextResponse.json({ error: `Python error: ${errorLog}` }, { status: 500 })
       }

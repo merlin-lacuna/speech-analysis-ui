@@ -106,8 +106,16 @@ export async function POST(request: NextRequest) {
       }
 
       if (stderr) {
-        console.error("Python script stderr:", stderr)
-        return NextResponse.json({ error: `Python error: ${stderr}` }, { status: 500 })
+        // Ignore known deprecation warnings about torch.cuda.amp.custom_fwd
+        if (stderr.includes('torch.cuda.amp.custom_fwd') && 
+            !stderr.includes('ImportError') && 
+            !stderr.includes('FileNotFoundError') &&
+            stderr.includes('INFO:root:Successfully added and saved sample')) {
+          console.warn("Ignoring SpeechBrain deprecation warning in stderr:", stderr)
+        } else {
+          console.error("Python script stderr:", stderr)
+          return NextResponse.json({ error: `Python error: ${stderr}` }, { status: 500 })
+        }
       }
 
       console.log("Python script output:", stdout)
@@ -125,9 +133,42 @@ export async function POST(request: NextRequest) {
         message: "Sample successfully ingested",
       })
     } catch (execError) {
+      // Check if error is just the torch deprecation warning
+      const errorStr = String(execError);
+      const isOnlyDeprecationWarning = 
+        errorStr.includes('torch.cuda.amp.custom_fwd') && 
+        !errorStr.includes('ImportError') && 
+        !errorStr.includes('FileNotFoundError') &&
+        (errorStr.includes('Successfully added and saved sample') ||
+         errorStr.includes('INFO:root:Successfully processed'));
+
+      if (isOnlyDeprecationWarning) {
+        console.warn("Ignoring SpeechBrain deprecation warning in execError:", errorStr);
+        // Return a successful response
+        return NextResponse.json({
+          success: true,
+          message: "Sample successfully ingested (with ignorable warnings)",
+        });
+      }
+      
       // Check for error log even in case of execution error
       if (existsSync(errorLogPath)) {
-        const errorLog = await readFile(errorLogPath, 'utf8')
+        const errorLog = await readFile(errorLogPath, 'utf8');
+        
+        // Check if error log only contains deprecation warnings but also has success messages
+        if (errorLog.includes('torch.cuda.amp.custom_fwd') && 
+            (errorLog.includes('Successfully added and saved sample') ||
+             errorLog.includes('INFO:root:Successfully processed')) &&
+            !errorLog.includes('ImportError') && 
+            !errorLog.includes('FileNotFoundError')) {
+          console.warn("Ignoring SpeechBrain deprecation warning in error log:", errorLog);
+          // Return a successful response
+          return NextResponse.json({
+            success: true,
+            message: "Sample successfully ingested (with ignorable warnings)",
+          });
+        }
+        
         console.error("Python error log:", errorLog)
         return NextResponse.json({ error: `Python error: ${errorLog}` }, { status: 500 })
       }

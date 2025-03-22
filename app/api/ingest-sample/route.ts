@@ -121,23 +121,23 @@ except Exception as e:
     await writeFile(scriptPath, pythonScript)
 
     // Execute the Python script using the venv Python path
-    const pythonPath = join(process.cwd(), 'venv', 'Scripts', 'python.exe').replace(/\\/g, '/')
-    
+    const pythonPath = join(process.cwd(), 'venv', process.platform === 'win32' ? 'Scripts' : 'bin', process.platform === 'win32' ? 'python.exe' : 'python').replace(/\\/g, '/')
+
     try {
       const { stdout, stderr } = await execPromise(`"${pythonPath}" "${scriptPath}"`)
-      
+
       // Clean up temporary files
       try {
         await Promise.all([
           unlink(audioPath),
           unlink(wavPath),
           unlink(scriptPath),
-          unlink(errorLogPath).catch(() => {})  // Error log might not exist
+          unlink(errorLogPath).catch(() => { })  // Error log might not exist
         ])
       } catch (error) {
         console.warn("Failed to clean up some temporary files:", error)
       }
-      
+
       // Check for error log
       if (existsSync(errorLogPath)) {
         const errorLog = await readFile(errorLogPath, 'utf8')

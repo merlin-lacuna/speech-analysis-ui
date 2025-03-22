@@ -75,106 +75,43 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Failed to convert audio format" }, { status: 500 })
     }
 
-    // Run the Python script directly with inline code
-    const pythonScript = `
-import sys
-import traceback
-import os
-
-# Add the project root directory to Python path
-project_root = '${process.cwd().replace(/\\/g, '/')}'
-sys.path.append(project_root)
-sys.path.append(os.path.join(project_root, 'scripts'))
-
-from audio_processor import AudioProcessor
-
-try:
-    # Print debugging info
-    audio_path = '${wavPath}'  # Use the WAV file instead of WebM
-    output_path = '${publicSpectrogramPath}'
-    
-    print(f"Audio file exists: {os.path.exists(audio_path)}")
-    print(f"Audio file size: {os.path.getsize(audio_path) if os.path.exists(audio_path) else 'file not found'}")
-    
-    # Process audio
-    processor = AudioProcessor()
-    result = processor.process_audio_file(audio_path, generate_spectrogram=True, spectrogram_path=output_path)
-    
-    # Print results as JSON for parsing
-    import json
-    import numpy as np
-
-    # Convert category scores from float32 to native Python float
-    converted_scores = {
-        category: float(score) 
-        for category, score in result.category_scores.items()
-    }
-    
-    print("RESULT_JSON:" + json.dumps({
-        "emotion": result.label,
-        "confidence": float(result.confidence),
-        "category_scores": converted_scores
-    }))
-
-except Exception as e:
-    error_msg = f"Error: {str(e)}\\nTraceback:\\n{traceback.format_exc()}"
-    print(error_msg)  # This will go to stderr
-    with open('${errorLogPath}', 'w') as f:
-        f.write(error_msg)
-    sys.exit(1)
-    `
-
-    // Write the Python script to a temporary file
-    const scriptPath = join(tempDir, `${id}_script.py`).replace(/\\/g, '/')
-    await writeFile(scriptPath, pythonScript)
-
     // Execute the Python script using the venv Python path
     const pythonPath = join(process.cwd(), 'venv', 'Scripts', 'python.exe').replace(/\\/g, '/')
+    const processorScript = join(process.cwd(), 'scripts', 'process_audio.py').replace(/\\/g, '/')
     
     try {
-      const { stdout, stderr } = await execPromise(`"${pythonPath}" "${scriptPath}"`)
+      const { stdout, stderr } = await execPromise(`"${pythonPath}" "${processorScript}" "${wavPath}" "${publicSpectrogramPath}"`)
       
       // Clean up temporary files
       try {
         await Promise.all([
           unlink(audioPath),
           unlink(wavPath),
-          unlink(scriptPath),
           unlink(errorLogPath).catch(() => {})  // Error log might not exist
         ])
       } catch (error) {
         console.warn("Failed to clean up some temporary files:", error)
       }
-      
-      // Check for error log
-      if (existsSync(errorLogPath)) {
-        const errorLog = await readFile(errorLogPath, 'utf8')
-        console.error("Python error log:", errorLog)
-        return NextResponse.json({ error: `Python error: ${errorLog}` }, { status: 500 })
-      }
 
+      // Log debug output from stderr if any
       if (stderr) {
-        console.error("Python script stderr:", stderr)
-        return NextResponse.json({ error: `Python error: ${stderr}` }, { status: 500 })
+        console.log("Python debug output:", stderr)
       }
 
-      console.log("Python script output:", stdout)
-
-      // Parse the emotion analysis results from stdout
-      const resultMatch = stdout.match(/RESULT_JSON:(.+)/)
-      if (!resultMatch) {
-        return NextResponse.json({ error: "Failed to parse emotion analysis results" }, { status: 500 })
+      // Parse the JSON output from stdout
+      let analysisResult
+      try {
+        analysisResult = JSON.parse(stdout)
+      } catch (parseError) {
+        console.error("Failed to parse Python output:", stdout)
+        return NextResponse.json({ error: "Failed to parse analysis results" }, { status: 500 })
       }
-
-      const analysisResult = JSON.parse(resultMatch[1])
 
       // Return both the spectrogram URL and emotion analysis
       return NextResponse.json({
         spectrogramUrl: `/spectrograms/${id}.png`,
-        emotion: analysisResult.emotion,
-        confidence: analysisResult.confidence,
-        category_scores: analysisResult.category_scores,
-        message: stdout,
+        ...analysisResult,
+        debug: stderr  // Include debug output in response
       })
     } catch (execError) {
       // Check for error log even in case of execution error

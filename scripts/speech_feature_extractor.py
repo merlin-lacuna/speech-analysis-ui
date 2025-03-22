@@ -3,6 +3,7 @@ import librosa
 import faiss
 import json
 import os
+import sys
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 from sklearn.preprocessing import StandardScaler
@@ -66,11 +67,11 @@ class EnhancedFeatureExtractor:
             mfcc_delta_std = np.std(mfcc_delta, axis=1)
             
             # Debug print
-            print("\nRhythm features shapes:")
-            print(f"zcr: {zcr.shape}")
-            print(f"tempo: {np.array([tempo]).shape}")  # Debug tempo shape
-            print(f"mfcc_delta_mean: {mfcc_delta_mean.shape}")
-            print(f"mfcc_delta_std: {mfcc_delta_std.shape}")
+            print("\nRhythm features shapes:", file=sys.stderr)
+            print(f"zcr: {zcr.shape}", file=sys.stderr)
+            print(f"tempo: {np.array([tempo]).shape}", file=sys.stderr)  # Debug tempo shape
+            print(f"mfcc_delta_mean: {mfcc_delta_mean.shape}", file=sys.stderr)
+            print(f"mfcc_delta_std: {mfcc_delta_std.shape}", file=sys.stderr)
             
             # Calculate zcr statistics first to ensure 1D
             zcr_mean = np.mean(zcr, axis=1)[0]  # Take first channel if stereo
@@ -88,9 +89,9 @@ class EnhancedFeatureExtractor:
             ]
             
             # Print shapes for debugging
-            print("\nFeature array shapes:")
+            print("\nFeature array shapes:", file=sys.stderr)
             for i, arr in enumerate(feature_arrays):
-                print(f"Array {i}: shape {arr.shape}, dims {arr.ndim}")
+                print(f"Array {i}: shape {arr.shape}, dims {arr.ndim}", file=sys.stderr)
             
             # Concatenate arrays
             features = np.concatenate(feature_arrays)
@@ -103,7 +104,7 @@ class EnhancedFeatureExtractor:
                 
             return features.astype(np.float32)
         except Exception as e:
-            print(f"Error in rhythm features: {str(e)}")
+            print(f"Error in rhythm features: {str(e)}", file=sys.stderr)
             raise
 
     def extract_energy_features(self, y: np.ndarray, sr: int) -> np.ndarray:
@@ -117,9 +118,9 @@ class EnhancedFeatureExtractor:
             spec_energy = np.sum(spec, axis=0)
             
             # Debug print
-            print("\nEnergy features shapes:")
-            print(f"rms: {rms.shape}")
-            print(f"spec_energy: {spec_energy.shape}")
+            print("\nEnergy features shapes:", file=sys.stderr)
+            print(f"rms: {rms.shape}", file=sys.stderr)
+            print(f"spec_energy: {spec_energy.shape}", file=sys.stderr)
             
             # Energy statistics - ensure all are 1D arrays
             features = np.concatenate([
@@ -137,18 +138,18 @@ class EnhancedFeatureExtractor:
                 
             return features.astype(np.float32)
         except Exception as e:
-            print(f"Error in energy features: {str(e)}")
+            print(f"Error in energy features: {str(e)}", file=sys.stderr)
             raise
 
     def extract_pitch_features(self, y: np.ndarray, sr: int) -> np.ndarray:
         """Extract pitch-independent features"""
         try:
+            # Debug print
+            print("\nPitch features shapes:", file=sys.stderr)
+            
             # Pitch tracking
             pitches, magnitudes = librosa.piptrack(y=y, sr=sr)
-            
-            # Debug print
-            print("\nPitch features shapes:")
-            print(f"pitches: {pitches.shape}")
+            print(f"pitches: {pitches.shape}", file=sys.stderr)
             
             # Get pitch contour (normalized)
             pitch_contour = np.mean(pitches, axis=0)
@@ -157,7 +158,7 @@ class EnhancedFeatureExtractor:
             else:
                 pitch_contour = np.zeros(1)  # Fallback if no pitch detected
             
-            print(f"pitch_contour: {pitch_contour.shape}")
+            print(f"pitch_contour: {pitch_contour.shape}", file=sys.stderr)
             
             # Extract pitch variation features - ensure all are arrays
             features = np.concatenate([
@@ -175,7 +176,7 @@ class EnhancedFeatureExtractor:
                 
             return features.astype(np.float32)
         except Exception as e:
-            print(f"Error in pitch features: {str(e)}")
+            print(f"Error in pitch features: {str(e)}", file=sys.stderr)
             raise
 
     def extract_pause_features(self, y: np.ndarray, sr: int) -> np.ndarray:
@@ -214,11 +215,11 @@ class EnhancedFeatureExtractor:
                 features = np.zeros(4, dtype=np.float32)
             
             # Debug print
-            print("\nPause features:")
-            print(f"Number of pauses: {features[0]}")
-            print(f"Average pause length: {features[1]:.2f}")
-            print(f"Pause variation: {features[2]:.2f}")
-            print(f"Silence ratio: {features[3]:.2f}")
+            print("\nPause features:", file=sys.stderr)
+            print(f"Number of pauses: {features[0]}", file=sys.stderr)
+            print(f"Average pause length: {features[1]:.2f}", file=sys.stderr)
+            print(f"Pause variation: {features[2]:.2f}", file=sys.stderr)
+            print(f"Silence ratio: {features[3]:.2f}", file=sys.stderr)
             
             # Pad to match expected dimension
             if len(features) < self.feature_dims['pause']:
@@ -228,7 +229,7 @@ class EnhancedFeatureExtractor:
             
             return features
         except Exception as e:
-            print(f"Error in pause features: {str(e)}")
+            print(f"Error in pause features: {str(e)}", file=sys.stderr)
             # Return zero features as fallback
             return np.zeros(self.feature_dims['pause'], dtype=np.float32)
 
@@ -241,14 +242,14 @@ class EnhancedFeatureExtractor:
             spectral_rolloff = librosa.feature.spectral_rolloff(y=y, sr=sr)
             
             # Debug print
-            print("\nVoice quality features shapes:")
-            print(f"spectral_centroid: {spectral_centroid.shape}")
-            print(f"spectral_bandwidth: {spectral_bandwidth.shape}")
-            print(f"spectral_rolloff: {spectral_rolloff.shape}")
+            print("\nVoice quality features shapes:", file=sys.stderr)
+            print(f"spectral_centroid: {spectral_centroid.shape}", file=sys.stderr)
+            print(f"spectral_bandwidth: {spectral_bandwidth.shape}", file=sys.stderr)
+            print(f"spectral_rolloff: {spectral_rolloff.shape}", file=sys.stderr)
             
             # MFCC-based voice quality
             mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=20)
-            print(f"mfcc: {mfcc.shape}")
+            print(f"mfcc: {mfcc.shape}", file=sys.stderr)
             
             # Ensure all features are 1D arrays before concatenation
             features = np.concatenate([
@@ -269,34 +270,34 @@ class EnhancedFeatureExtractor:
                 
             return features.astype(np.float32)
         except Exception as e:
-            print(f"Error in voice quality features: {str(e)}")
+            print(f"Error in voice quality features: {str(e)}", file=sys.stderr)
             raise
 
     def extract_speech_rate_features(self, y: np.ndarray, sr: int) -> np.ndarray:
         """Extract speech rate features"""
         try:
             # Debug print
-            print("\nSpeech rate features shapes:")
+            print("\nSpeech rate features shapes:", file=sys.stderr)
             
             # Envelope-based rate analysis using scipy's hilbert
             envelope = np.abs(hilbert(y.ravel()))  # Make sure input is 1D
-            print(f"envelope: {envelope.shape}")
+            print(f"envelope: {envelope.shape}", file=sys.stderr)
             
             # Reshape for RMS calculation and ensure non-empty
             envelope_frames = envelope.reshape(-1, 1)
             envelope_smooth = librosa.feature.rms(y=envelope_frames, frame_length=2048)[0]
-            print(f"envelope_smooth before reshape: {envelope_smooth.shape}")
+            print(f"envelope_smooth before reshape: {envelope_smooth.shape}", file=sys.stderr)
             
             # Handle empty or invalid values
             if len(envelope_smooth) == 0 or np.any(np.isnan(envelope_smooth)):
-                print("Warning: Empty or invalid envelope, using zeros")
+                print("Warning: Empty or invalid envelope, using zeros", file=sys.stderr)
                 # Return zero features with correct dimension
                 features = np.zeros(self.feature_dims['speech_rate'], dtype=np.float32)
                 return features
             
             # Ensure envelope_smooth is 1D
             envelope_smooth = envelope_smooth.ravel()
-            print(f"envelope_smooth after reshape: {envelope_smooth.shape}")
+            print(f"envelope_smooth after reshape: {envelope_smooth.shape}", file=sys.stderr)
             
             # Calculate statistics - ensure all are scalar values with fallbacks
             try:
@@ -319,7 +320,7 @@ class EnhancedFeatureExtractor:
             except:
                 env_rate = 0.0
             
-            print(f"Statistics: mean={env_mean}, std={env_std}, skew={env_skew}, rate={env_rate}")
+            print(f"Statistics: mean={env_mean}, std={env_std}, skew={env_skew}, rate={env_rate}", file=sys.stderr)
             
             # Create feature arrays one by one for debugging
             feature_arrays = [
@@ -330,13 +331,13 @@ class EnhancedFeatureExtractor:
             ]
             
             # Print shapes for debugging
-            print("\nSpeech rate feature array shapes:")
+            print("\nSpeech rate feature array shapes:", file=sys.stderr)
             for i, arr in enumerate(feature_arrays):
-                print(f"Array {i}: shape {arr.shape}, dims {arr.ndim}")
+                print(f"Array {i}: shape {arr.shape}, dims {arr.ndim}", file=sys.stderr)
             
             # Concatenate arrays
             features = np.concatenate(feature_arrays)
-            print(f"Concatenated features: {features.shape}")
+            print(f"Concatenated features: {features.shape}", file=sys.stderr)
             
             # Pad or truncate to match expected dimension
             if len(features) < self.feature_dims['speech_rate']:
@@ -344,10 +345,10 @@ class EnhancedFeatureExtractor:
             else:
                 features = features[:self.feature_dims['speech_rate']]
             
-            print(f"Final features: {features.shape}")
+            print(f"Final features: {features.shape}", file=sys.stderr)
             return features.astype(np.float32)
         except Exception as e:
-            print(f"Error in speech rate features: {str(e)}")
+            print(f"Error in speech rate features: {str(e)}", file=sys.stderr)
             raise
 
     def extract_all_features(self, audio_path: str) -> SpeechFeatures:
@@ -369,7 +370,7 @@ class EnhancedFeatureExtractor:
             return features
             
         except Exception as e:
-            print(f"Error in feature extraction: {str(e)}")
+            print(f"Error in feature extraction: {str(e)}", file=sys.stderr)
             raise
 
     def add_sample(self, audio_path: str, label: str):
@@ -383,11 +384,11 @@ class EnhancedFeatureExtractor:
                 # Ensure features are properly shaped for FAISS
                 features_reshaped = category_features.reshape(1, -1).astype(np.float32)
                 if np.any(np.isnan(features_reshaped)):
-                    print(f"Warning: NaN values in {category} features, replacing with zeros")
+                    print(f"Warning: NaN values in {category} features, replacing with zeros", file=sys.stderr)
                     features_reshaped = np.nan_to_num(features_reshaped, 0.0)
                 index.add(features_reshaped)
             except Exception as e:
-                print(f"Warning: Error adding {category} features: {str(e)}")
+                print(f"Warning: Error adding {category} features: {str(e)}", file=sys.stderr)
                 continue
         
         # Store label
@@ -398,9 +399,9 @@ class EnhancedFeatureExtractor:
         # Save after each ingestion to preserve data
         try:
             self.save_database('speech_database')
-            print(f"Successfully added and saved sample with label: {label}")
+            print(f"Successfully added and saved sample with label: {label}", file=sys.stderr)
         except Exception as e:
-            print(f"Warning: Error saving database: {str(e)}")
+            print(f"Warning: Error saving database: {str(e)}", file=sys.stderr)
 
     def find_closest_match(self, audio_path: str) -> Tuple[str, Dict[str, float]]:
         """Find the closest matching sample with detailed category scores"""

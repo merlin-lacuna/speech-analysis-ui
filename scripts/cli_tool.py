@@ -1,16 +1,25 @@
 import sounddevice as sd
 import numpy as np
-import winsound
 import keyboard
 import os
+import sys
 from audio_processor import AudioProcessor
 import time
 from threading import Event
 
+def beep(frequency=800, duration=0.2):
+    """Platform-agnostic beep function"""
+    if sys.platform == 'win32':
+        import winsound
+        winsound.Beep(frequency, int(duration * 1000))
+    else:
+        # On Unix-like systems, use the terminal bell
+        print('\a', end='', flush=True)
+
 class AudioCLI:
     def __init__(self):
         self.beep_freq = 800
-        self.beep_duration = 200  # milliseconds
+        self.beep_duration = 0.2  # seconds
         self.processor = AudioProcessor()
         self.stop_recording = Event()
         
@@ -37,7 +46,7 @@ class AudioCLI:
     def beep(self):
         """Play a beep sound"""
         try:
-            winsound.Beep(self.beep_freq, self.beep_duration)
+            beep(self.beep_freq, self.beep_duration)
         except Exception as e:
             print(f"Warning: Could not play beep sound: {e}")
     

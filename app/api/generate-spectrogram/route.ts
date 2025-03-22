@@ -121,7 +121,7 @@ except Exception as e:
     await writeFile(scriptPath, pythonScript)
 
     // Execute the Python script using the venv Python path
-    const pythonPath = join(process.cwd(), 'venv', 'Scripts', 'python.exe').replace(/\\/g, '/')
+    const pythonPath = join(process.cwd(), 'venv', process.platform === 'win32' ? 'Scripts' : 'bin', process.platform === 'win32' ? 'python.exe' : 'python')
     
     try {
       const { stdout, stderr } = await execPromise(`"${pythonPath}" "${scriptPath}"`)

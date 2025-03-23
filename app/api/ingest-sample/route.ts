@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { writeFile, mkdir, readFile, unlink, rename } from "fs/promises"
+import { writeFile, mkdir, readFile, unlink, rename, copyFile } from "fs/promises"
 import { join } from "path"
 import { randomUUID } from "crypto"
 import { exec } from "child_process"
@@ -75,7 +75,21 @@ export async function POST(request: NextRequest) {
 
     // Save the WAV file with the label and name
     const finalAudioPath = join(trainingDir, `${label}_${name}_${id}.wav`).replace(/\\/g, '/')
-    await rename(wavPath, finalAudioPath)
+    
+    try {
+      // First try rename (works on same filesystem)
+      await rename(wavPath, finalAudioPath)
+    } catch (error) {
+      // If rename fails due to cross-device error, use copy + delete instead
+      if (error.code === 'EXDEV') {
+        console.log("Cross-device link detected, using copy instead of rename...")
+        await copyFile(wavPath, finalAudioPath)
+        await unlink(wavPath)
+      } else {
+        // If it's another type of error, rethrow it
+        throw error
+      }
+    }
 
     // Run the Python script to ingest the sample
     const pythonScript = `

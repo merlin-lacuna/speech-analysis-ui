@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { writeFile, mkdir, readFile, unlink, rename } from "fs/promises"
+import { writeFile, mkdir, readFile, unlink, rename, copyFile } from "fs/promises"
 import { join } from "path"
 import { randomUUID } from "crypto"
 import { exec } from "child_process"
@@ -142,7 +142,21 @@ except Exception as e:
       // Save the WAV file with the emotion label and name
       const emotion = analysisResult.emotion || "unknown"
       const finalAudioPath = join(assessmentsDir, `${emotion}_${name}_${id}.wav`).replace(/\\/g, '/')
-      await rename(wavPath, finalAudioPath)
+      
+      try {
+        // First try rename (works on same filesystem)
+        await rename(wavPath, finalAudioPath)
+      } catch (error) {
+        // If rename fails due to cross-device error, use copy + delete instead
+        if (error.code === 'EXDEV') {
+          console.log("Cross-device link detected, using copy instead of rename...")
+          await copyFile(wavPath, finalAudioPath)
+          await unlink(wavPath)
+        } else {
+          // If it's another type of error, rethrow it
+          throw error
+        }
+      }
 
       // Clean up temporary files
       try {

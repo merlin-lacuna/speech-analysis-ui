@@ -91,4 +91,14 @@ body {
   body {
     @apply bg-background text-foreground;
   }
+  
+  /* Override any accent-color inheritance for audio controls */
+  audio {
+    accent-color: initial;
+  }
+  
+  /* Custom styling for non-audio range inputs */
+  input[type="range"]:not(audio *) {
+    accent-color: #3b82f6;
+  }
 }

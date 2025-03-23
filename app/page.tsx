@@ -18,9 +18,15 @@ const GaugeChart = ({ label, value }: { label: string, value: number }) => {
         min="0"
         max="100"
         value={value}
-        className="w-full h-4 accent-blue-500"
+        className="gauge-slider w-full h-4 accent-blue-500"
         readOnly
       />
+      <style jsx>{`
+        .gauge-slider {
+          /* Ensure these styles are scoped only to this component */
+          accent-color: #3b82f6;
+        }
+      `}</style>
     </div>
   );
 };
@@ -42,9 +48,10 @@ export default function Home() {
   const [analysisResult, setAnalysisResult] = useState<EmotionAnalysis | null>(null);
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
   const [audioChunks, setAudioChunks] = useState<Blob[]>([]);
+  const [hasAnalyzed, setHasAnalyzed] = useState(false); // Track if analysis has happened
   const audioRef = useRef<HTMLAudioElement>(null);
 
-  // Mock data for the analysis results
+  // Default metrics before analysis
   const confidenceAnalysis = {
     speechRate: "Very Low",
     pitchVariability: "Very Low",
@@ -54,11 +61,12 @@ export default function Home() {
     strategicPausing: "Very Low"
   };
 
+  // Default metrics before analysis (show empty values)
   const voiceMetrics = {
-    amplitude: 30,
-    pitch: 45,
-    frequency: 60,
-    energy: 25
+    tonalShape: 0,
+    vocalEnergy: 0,
+    pitchVariation: 0,
+    vocalClarity: 0
   };
 
   const startRecording = async () => {
@@ -68,6 +76,7 @@ export default function Home() {
       setAnalysisResult(null);
       setAudioBlob(null);
       setAudioUrl(null);
+      setHasAnalyzed(false); // Reset analysis state
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream, {
@@ -163,6 +172,7 @@ export default function Home() {
         confidence: data.confidence,
         features: data.features
       });
+      setHasAnalyzed(true); // Mark that analysis has happened
       console.log("Audio analysis completed successfully:", data.message);
     } catch (error) {
       console.error("Error analyzing audio:", error);
@@ -172,7 +182,8 @@ export default function Home() {
     }
   };
 
-  // Handle audio time update
+  // Handle audio time update - keeping this for compatibility
+  // but we're now using the native audio controls
   const handleTimeUpdate = () => {
     if (audioRef.current) {
       setCurrentTime(audioRef.current.currentTime);
@@ -239,67 +250,29 @@ export default function Home() {
 
                 {audioUrl && !isRecording && (
                   <div className="mt-6 space-y-4">
-                    <div className="flex items-center space-x-2 bg-slate-50 p-3 rounded-md">
-                      <button 
-                        className="p-1.5 hover:bg-slate-200 rounded-full transition-colors"
-                        onClick={() => audioRef.current?.play()}
-                      >
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          width="20"
-                          height="20"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          className="text-slate-700"
-                        >
-                          <polygon points="5 3 19 12 5 21 5 3"></polygon>
-                        </svg>
-                      </button>
-                      <div className="text-xs text-slate-500 w-16 flex-shrink-0">
-                        {`${Math.floor(currentTime / 60)}:${String(Math.floor(currentTime % 60)).padStart(2, '0')} / ${Math.floor(duration / 60)}:${String(Math.floor(duration % 60)).padStart(2, '0')}`}
-                      </div>
-                      <div className="flex-1">
-                        <input
-                          type="range"
-                          min="0"
-                          max={duration || 100}
-                          value={currentTime}
-                          onChange={(e) => {
-                            const time = parseFloat(e.target.value);
-                            setCurrentTime(time);
-                            if (audioRef.current) audioRef.current.currentTime = time;
-                          }}
-                          className="w-full accent-blue-500"
-                        />
-                      </div>
-                      <button className="p-1.5 hover:bg-slate-200 rounded-full transition-colors">
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          width="20"
-                          height="20"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          className="text-slate-700"
-                        >
-                          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                          <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-                        </svg>
-                      </button>
+                    <div className="bg-slate-50 p-3 rounded-md flex justify-center">
+                      <style jsx>{`
+                        /* Override global styles for the audio element within this component */
+                        audio {
+                          /* Reset any inherited styles */
+                          width: 100%;
+                          accent-color: initial;
+                        }
+                        audio::-webkit-media-controls-panel {
+                          background-color: #f8fafc;
+                        }
+                        audio::-webkit-media-controls-current-time-display,
+                        audio::-webkit-media-controls-time-remaining-display {
+                          color: #334155;
+                        }
+                      `}</style>
                       <audio
                         ref={audioRef}
                         src={audioUrl}
                         onTimeUpdate={handleTimeUpdate}
                         onLoadedMetadata={handleTimeUpdate}
-                        className="hidden"
                         controls
+                        className="w-full"
                       />
                     </div>
                     <Button className="w-full" onClick={analyzeEmotion} disabled={isProcessing}>
@@ -324,56 +297,56 @@ export default function Home() {
       <section className="py-8">
         <div className="container mx-auto">
           <div style={{ width: '40%', maxWidth: '600px', margin: '0 auto' }}>
-            <Card className="shadow-md bg-[#1e293b] text-white">
+            <Card className="shadow-md">
               <CardContent className="p-6">
                 <h3 className="text-lg font-semibold mb-4">Voice Analysis</h3>
 
                 <div className="space-y-4">
                   <div className="flex justify-between items-center">
                     <span className="text-sm">Confidence Analysis</span>
-                    <span className="text-xs text-red-300">{confidenceAnalysis.speechRate}</span>
+                    <span className="text-xs text-red-500">{confidenceAnalysis.speechRate}</span>
                   </div>
-                  <div className="h-2 bg-gray-700 rounded-full w-full overflow-hidden">
+                  <div className="h-2 bg-gray-200 rounded-full w-full overflow-hidden">
                     <div className="h-full bg-red-500 rounded-full" style={{ width: "10%" }}></div>
                   </div>
 
                   <div className="flex justify-between items-center">
                     <span className="text-sm">Pitch Variability</span>
-                    <span className="text-xs text-red-300">{confidenceAnalysis.pitchVariability}</span>
+                    <span className="text-xs text-red-500">{confidenceAnalysis.pitchVariability}</span>
                   </div>
-                  <div className="h-2 bg-gray-700 rounded-full w-full overflow-hidden">
+                  <div className="h-2 bg-gray-200 rounded-full w-full overflow-hidden">
                     <div className="h-full bg-red-500 rounded-full" style={{ width: "10%" }}></div>
                   </div>
 
                   <div className="flex justify-between items-center">
                     <span className="text-sm">Volume Consistency</span>
-                    <span className="text-xs text-red-300">{confidenceAnalysis.volumeConsistency}</span>
+                    <span className="text-xs text-red-500">{confidenceAnalysis.volumeConsistency}</span>
                   </div>
-                  <div className="h-2 bg-gray-700 rounded-full w-full overflow-hidden">
+                  <div className="h-2 bg-gray-200 rounded-full w-full overflow-hidden">
                     <div className="h-full bg-red-500 rounded-full" style={{ width: "10%" }}></div>
                   </div>
 
                   <div className="flex justify-between items-center">
                     <span className="text-sm">Filler Word Usage</span>
-                    <span className="text-xs text-blue-300">{confidenceAnalysis.fillerWordUsage}</span>
+                    <span className="text-xs text-blue-500">{confidenceAnalysis.fillerWordUsage}</span>
                   </div>
-                  <div className="h-2 bg-gray-700 rounded-full w-full overflow-hidden">
+                  <div className="h-2 bg-gray-200 rounded-full w-full overflow-hidden">
                     <div className="h-full bg-red-500 rounded-full" style={{ width: "100%" }}></div>
                   </div>
 
                   <div className="flex justify-between items-center">
                     <span className="text-sm">Articulation Clarity</span>
-                    <span className="text-xs text-red-300">{confidenceAnalysis.articulationClarity}</span>
+                    <span className="text-xs text-red-500">{confidenceAnalysis.articulationClarity}</span>
                   </div>
-                  <div className="h-2 bg-gray-700 rounded-full w-full overflow-hidden">
+                  <div className="h-2 bg-gray-200 rounded-full w-full overflow-hidden">
                     <div className="h-full bg-red-500 rounded-full" style={{ width: "10%" }}></div>
                   </div>
 
                   <div className="flex justify-between items-center">
                     <span className="text-sm">Strategic Pausing</span>
-                    <span className="text-xs text-red-300">{confidenceAnalysis.strategicPausing}</span>
+                    <span className="text-xs text-red-500">{confidenceAnalysis.strategicPausing}</span>
                   </div>
-                  <div className="h-2 bg-gray-700 rounded-full w-full overflow-hidden">
+                  <div className="h-2 bg-gray-200 rounded-full w-full overflow-hidden">
                     <div className="h-full bg-red-500 rounded-full" style={{ width: "10%" }}></div>
                   </div>
                 </div>
@@ -387,30 +360,51 @@ export default function Home() {
       <section className="py-8">
         <div className="container mx-auto">
           <div style={{ width: '40%', maxWidth: '600px', margin: '0 auto' }}>
-            <Card className="shadow-md bg-[#1e293b] text-white">
+            <Card className="shadow-md">
               <CardContent className="p-6">
                 <h3 className="text-lg font-semibold mb-6">Voice Metrics</h3>
 
-                <div className="grid grid-cols-2 gap-6">
-                  {analysisResult && analysisResult.features ? (
-                    <>
-                      {Object.entries(analysisResult.features).slice(0, 4).map(([key, value]) => (
+                {!hasAnalyzed ? (
+                  <div className="text-center py-6">
+                    <p className="text-sm text-gray-500">Record your voice and click "Analyze Emotion" to see your voice metrics</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-6">
+                    {analysisResult && analysisResult.features ? (
+                      <>
+                        {/* Map feature indices to human-readable names with better normalization */}
                         <GaugeChart 
-                          key={key} 
-                          label={key.charAt(0).toUpperCase() + key.slice(1).replace(/_/g, ' ')} 
-                          value={Math.round(value * 100)} 
+                          key="tonal_shape" 
+                          label="Tonal Shape" 
+                          value={Math.min(100, Math.max(0, Math.round(
+                            (Math.abs(analysisResult.features.feature_0) / 500) * 100
+                          )))} 
                         />
-                      ))}
-                    </>
-                  ) : (
-                    <>
-                      <GaugeChart label="Amplitude" value={voiceMetrics.amplitude} />
-                      <GaugeChart label="Pitch" value={voiceMetrics.pitch} />
-                      <GaugeChart label="Frequency Velocity" value={voiceMetrics.frequency} />
-                      <GaugeChart label="Energy" value={voiceMetrics.energy} />
-                    </>
-                  )}
-                </div>
+                        <GaugeChart 
+                          key="vocal_energy" 
+                          label="Vocal Energy" 
+                          value={Math.min(100, Math.max(0, Math.round(
+                            (Math.abs(analysisResult.features.feature_1) / 150) * 100
+                          )))} 
+                        />
+                        <GaugeChart 
+                          key="pitch_variation" 
+                          label="Pitch Variation" 
+                          value={Math.min(100, Math.max(0, Math.round(
+                            (analysisResult.features.feature_22 / 60) * 100
+                          )))} 
+                        />
+                        <GaugeChart 
+                          key="vocal_clarity" 
+                          label="Vocal Clarity" 
+                          value={Math.min(100, Math.max(0, Math.round(
+                            (analysisResult.features.feature_20 / 150) * 100
+                          )))} 
+                        />
+                      </>
+                    ) : null}
+                  </div>
+                )}
               </CardContent>
             </Card>
           </div>
@@ -424,24 +418,33 @@ export default function Home() {
             <Card className="shadow-md">
               <CardContent className="p-6">
                 <h3 className="text-lg font-semibold mb-4">Spectrogram</h3>
-                <div className="bg-slate-50 p-4 rounded-lg border border-slate-100 flex justify-center">
-                  <img
-                    src={spectrogramUrl || "/placeholder.svg"}
-                    alt="Audio Spectrogram"
-                    style={{ width: 'auto', height: 'auto', maxHeight: '200px' }}
-                    className="rounded-md shadow-sm"
-                  />
-                </div>
                 
-                {analysisResult && (
-                  <div className="mt-4 text-center">
-                    <h3 className="text-xl font-bold text-blue-600">
-                      {analysisResult.emotion.charAt(0).toUpperCase() + analysisResult.emotion.slice(1)}
-                    </h3>
-                    <p className="text-sm text-gray-500">
-                      Match Confidence: {(analysisResult.confidence * 100).toFixed(1)}%
-                    </p>
+                {!hasAnalyzed ? (
+                  <div className="text-center py-6 bg-slate-50 p-4 rounded-lg border border-slate-100">
+                    <p className="text-sm text-gray-500">Record your voice and click "Analyze Emotion" to see your audio spectrogram</p>
                   </div>
+                ) : (
+                  <>
+                    <div className="bg-slate-50 p-4 rounded-lg border border-slate-100 flex justify-center">
+                      <img
+                        src={spectrogramUrl || "/placeholder.svg"}
+                        alt="Audio Spectrogram"
+                        style={{ width: 'auto', height: 'auto', maxHeight: '200px' }}
+                        className="rounded-md shadow-sm"
+                      />
+                    </div>
+                    
+                    {analysisResult && (
+                      <div className="mt-4 text-center">
+                        <h3 className="text-xl font-bold text-blue-600">
+                          {analysisResult.emotion.charAt(0).toUpperCase() + analysisResult.emotion.slice(1)}
+                        </h3>
+                        <p className="text-sm text-gray-500">
+                          Match Confidence: {(analysisResult.confidence * 100).toFixed(1)}%
+                        </p>
+                      </div>
+                    )}
+                  </>
                 )}
               </CardContent>
             </Card>
@@ -455,18 +458,16 @@ export default function Home() {
           <div style={{ width: '40%', maxWidth: '600px', margin: '0 auto' }}>
             <Card className="shadow-md">
               <CardContent className="p-6">
-                <h3 className="text-base font-semibold mb-4">Our confidence analysis evaluates several key aspects of your speech:</h3>
+                <h3 className="text-base font-semibold mb-4">Our voice metrics evaluate several key aspects of your speech:</h3>
 
                 <ul className="space-y-3 text-sm text-muted-foreground">
-                  <li>- Speech Rate: A steady, moderate pace is often associated with confidence.</li>
-                  <li>- Pitch Variability: Controlled variation in pitch can indicate assurance.</li>
-                  <li>- Volume Consistency: Maintaining a steady volume suggests self-assurance.</li>
-                  <li>- Filler Word Usage: Fewer filler words often indicate more confident speech.</li>
-                  <li>- Articulation Clarity: Clear pronunciation is a sign of confidence.</li>
-                  <li>- Strategic Pausing: Thoughtful use of pauses can demonstrate composure.</li>
+                  <li>- <strong>Tonal Shape:</strong> Represents the overall contour of your speech sounds and how they form your unique voice signature.</li>
+                  <li>- <strong>Vocal Energy:</strong> Measures the power and projection in your voice, indicating how effectively your voice carries.</li>
+                  <li>- <strong>Pitch Variation:</strong> Tracks how your voice modulates between higher and lower tones, which conveys emotion and emphasis.</li>
+                  <li>- <strong>Vocal Clarity:</strong> Evaluates the crispness and definition in your speech, affecting how clearly your words are understood.</li>
                 </ul>
 
-                <p className="mt-4 text-sm text-muted-foreground">These metrics work together to provide an overall assessment of perceived confidence in your speech patterns.</p>
+                <p className="mt-4 text-sm text-muted-foreground">These metrics are derived from Mel-frequency cepstral coefficients (MFCCs), which are specialized measurements used in speech analysis to capture the unique characteristics of human voice.</p>
               </CardContent>
             </Card>
           </div>

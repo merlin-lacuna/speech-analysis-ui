@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Mic, Square, Loader2, Check } from "lucide-react"
 import { Label } from "@/components/ui/label"
+import { NameSelector } from "@/components/NameSelector"
 
 export default function SampleIngestion() {
   const [isRecording, setIsRecording] = useState(false)
@@ -15,6 +16,7 @@ export default function SampleIngestion() {
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null)
   const [audioChunks, setAudioChunks] = useState<Blob[]>([])
   const [ingestionSuccess, setIngestionSuccess] = useState(false)
+  const [selectedName, setSelectedName] = useState("Unknown")
 
   const startRecording = async () => {
     try {
@@ -95,6 +97,7 @@ export default function SampleIngestion() {
       const formData = new FormData()
       formData.append("audio", audioBlob)
       formData.append("label", label.trim())
+      formData.append("name", selectedName)
       console.log("Sending request to ingest audio sample...")
 
       const response = await fetch("/api/ingest-sample", {
@@ -130,6 +133,9 @@ export default function SampleIngestion() {
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="flex flex-col items-center justify-center gap-4">
+            <div className="mb-4">
+              <NameSelector value={selectedName} onChange={setSelectedName} />
+            </div>
             {isRecording ? (
               <Button variant="destructive" size="lg" className="w-16 h-16 rounded-full" onClick={stopRecording}>
                 <Square className="w-6 h-6" />
@@ -158,7 +164,7 @@ export default function SampleIngestion() {
               <div className="flex justify-center">
                 <audio controls src={URL.createObjectURL(audioBlob)} className="w-full" />
               </div>
-              
+
               <div className="space-y-2">
                 <Label htmlFor="label">Emotion Label</Label>
                 <Input
@@ -169,9 +175,9 @@ export default function SampleIngestion() {
                 />
               </div>
 
-              <Button 
-                className="w-full" 
-                onClick={ingestSample} 
+              <Button
+                className="w-full"
+                onClick={ingestSample}
                 disabled={isProcessing || !label.trim()}
               >
                 {isProcessing ? (

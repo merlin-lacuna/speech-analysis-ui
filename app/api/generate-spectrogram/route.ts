@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { writeFile, mkdir, readFile, unlink } from "fs/promises"
+import { writeFile, mkdir, readFile, unlink, rename } from "fs/promises"
 import { join } from "path"
 import { randomUUID } from "crypto"
 import { exec } from "child_process"
@@ -24,6 +24,7 @@ export async function POST(request: NextRequest) {
     console.log("Received audio analysis request")
     const formData = await request.formData()
     const audioFile = formData.get("audio") as File
+    const name = formData.get("name") as string || "Unknown"
 
     if (!audioFile) {
       console.error("No audio file provided")
@@ -56,6 +57,10 @@ export async function POST(request: NextRequest) {
     const publicDir = join(process.cwd(), "public")
     const spectrogramsDir = join(publicDir, "spectrograms")
     await ensureDir(spectrogramsDir)
+
+    // Create assessments directory if it doesn't exist
+    const assessmentsDir = join(process.cwd(), "audio_data", "assessments")
+    await ensureDir(assessmentsDir)
 
     const publicSpectrogramPath = join(spectrogramsDir, `${id}.png`).replace(/\\/g, '/')
 
@@ -122,22 +127,34 @@ except Exception as e:
 
     // Execute the Python script using the venv Python path
     const pythonPath = join(process.cwd(), 'venv', process.platform === 'win32' ? 'Scripts' : 'bin', process.platform === 'win32' ? 'python.exe' : 'python')
-    
+
     try {
       const { stdout, stderr } = await execPromise(`"${pythonPath}" "${scriptPath}"`)
-      
+
+      // Parse the emotion analysis results from stdout
+      const resultMatch = stdout.match(/RESULT_JSON:(.+)/)
+      if (!resultMatch) {
+        return NextResponse.json({ error: "Failed to parse emotion analysis results" }, { status: 500 })
+      }
+
+      const analysisResult = JSON.parse(resultMatch[1])
+
+      // Save the WAV file with the emotion label and name
+      const emotion = analysisResult.emotion || "unknown"
+      const finalAudioPath = join(assessmentsDir, `${emotion}_${name}_${id}.wav`).replace(/\\/g, '/')
+      await rename(wavPath, finalAudioPath)
+
       // Clean up temporary files
       try {
         await Promise.all([
           unlink(audioPath),
-          unlink(wavPath),
           unlink(scriptPath),
-          unlink(errorLogPath).catch(() => {})  // Error log might not exist
+          unlink(errorLogPath).catch(() => { })  // Error log might not exist
         ])
       } catch (error) {
         console.warn("Failed to clean up some temporary files:", error)
       }
-      
+
       // Check for error log
       if (existsSync(errorLogPath)) {
         const errorLog = await readFile(errorLogPath, 'utf8')
@@ -151,35 +168,20 @@ except Exception as e:
       }
 
       console.log("Python script output:", stdout)
-
-      // Parse the emotion analysis results from stdout
-      const resultMatch = stdout.match(/RESULT_JSON:(.+)/)
-      if (!resultMatch) {
-        return NextResponse.json({ error: "Failed to parse emotion analysis results" }, { status: 500 })
-      }
-
-      const analysisResult = JSON.parse(resultMatch[1])
-
+      
       // Return both the spectrogram URL and emotion analysis
       return NextResponse.json({
         spectrogramUrl: `/spectrograms/${id}.png`,
         emotion: analysisResult.emotion,
         confidence: analysisResult.confidence,
         features: analysisResult.features,
+        audioPath: finalAudioPath,
         message: stdout,
       })
-    } catch (execError) {
-      // Check for error log even in case of execution error
-      if (existsSync(errorLogPath)) {
-        const errorLog = await readFile(errorLogPath, 'utf8')
-        console.error("Python error log:", errorLog)
-        return NextResponse.json({ error: `Python error: ${errorLog}` }, { status: 500 })
-      }
-
-      console.error("Python execution error:", execError)
-      console.error("Full error details:", JSON.stringify(execError, null, 2))
+    } catch (error) {
+      console.error("Python execution error:", error)
       return NextResponse.json(
-        { error: `Python execution failed: ${execError instanceof Error ? execError.message : String(execError)}` },
+        { error: `Python execution failed: ${error instanceof Error ? error.message : String(error)}` },
         { status: 500 }
       )
     }

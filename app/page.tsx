@@ -4,6 +4,7 @@ import { useState, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Mic, Square, Loader2 } from "lucide-react"
+import { NameSelector } from "@/components/NameSelector"
 
 // Custom component for the voice metrics gauge charts
 const GaugeChart = ({ label, value }: { label: string, value: number }) => {
@@ -49,6 +50,8 @@ export default function Home() {
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
   const [audioChunks, setAudioChunks] = useState<Blob[]>([]);
   const [hasAnalyzed, setHasAnalyzed] = useState(false); // Track if analysis has happened
+  const [selectedName, setSelectedName] = useState("Unknown");
+  const [savedAudioPath, setSavedAudioPath] = useState<string | null>(null); // Track saved audio file path
   const audioRef = useRef<HTMLAudioElement>(null);
 
   // Default metrics before analysis
@@ -151,6 +154,7 @@ export default function Home() {
     try {
       const formData = new FormData();
       formData.append("audio", audioBlob);
+      formData.append("name", selectedName);
       console.log("Sending request to analyze audio...");
 
       const response = await fetch("/api/generate-spectrogram", {
@@ -172,8 +176,10 @@ export default function Home() {
         confidence: data.confidence,
         features: data.features
       });
+      setSavedAudioPath(data.audioPath);
       setHasAnalyzed(true); // Mark that analysis has happened
       console.log("Audio analysis completed successfully:", data.message);
+      console.log("Audio saved to:", data.audioPath);
     } catch (error) {
       console.error("Error analyzing audio:", error);
       alert(`Error analyzing audio: ${error instanceof Error ? error.message : String(error)}`);
@@ -225,6 +231,9 @@ export default function Home() {
                 <p className="text-center text-muted-foreground text-sm mb-6">Record your voice to analyze its emotional content</p>
 
                 <div className="flex flex-col items-center justify-center gap-4">
+                  <div className="mb-4">
+                    <NameSelector value={selectedName} onChange={setSelectedName} />
+                  </div>
                   {isRecording ? (
                     <Button variant="destructive" size="lg" className="w-16 h-16 rounded-full" onClick={stopRecording}>
                       <Square className="w-6 h-6" />
@@ -373,33 +382,33 @@ export default function Home() {
                     {analysisResult && analysisResult.features ? (
                       <>
                         {/* Map feature indices to human-readable names with better normalization */}
-                        <GaugeChart 
-                          key="tonal_shape" 
-                          label="Tonal Shape" 
+                        <GaugeChart
+                          key="tonal_shape"
+                          label="Tonal Shape"
                           value={Math.min(100, Math.max(0, Math.round(
                             (Math.abs(analysisResult.features.feature_0) / 500) * 100
-                          )))} 
+                          )))}
                         />
-                        <GaugeChart 
-                          key="vocal_energy" 
-                          label="Vocal Energy" 
+                        <GaugeChart
+                          key="vocal_energy"
+                          label="Vocal Energy"
                           value={Math.min(100, Math.max(0, Math.round(
                             (Math.abs(analysisResult.features.feature_1) / 150) * 100
-                          )))} 
+                          )))}
                         />
-                        <GaugeChart 
-                          key="pitch_variation" 
-                          label="Pitch Variation" 
+                        <GaugeChart
+                          key="pitch_variation"
+                          label="Pitch Variation"
                           value={Math.min(100, Math.max(0, Math.round(
                             (analysisResult.features.feature_22 / 60) * 100
-                          )))} 
+                          )))}
                         />
-                        <GaugeChart 
-                          key="vocal_clarity" 
-                          label="Vocal Clarity" 
+                        <GaugeChart
+                          key="vocal_clarity"
+                          label="Vocal Clarity"
                           value={Math.min(100, Math.max(0, Math.round(
                             (analysisResult.features.feature_20 / 150) * 100
-                          )))} 
+                          )))}
                         />
                       </>
                     ) : null}
@@ -418,7 +427,7 @@ export default function Home() {
             <Card className="shadow-md">
               <CardContent className="p-6">
                 <h3 className="text-lg font-semibold mb-4">Spectrogram</h3>
-                
+
                 {!hasAnalyzed ? (
                   <div className="text-center py-6 bg-slate-50 p-4 rounded-lg border border-slate-100">
                     <p className="text-sm text-gray-500">Record your voice and click "Analyze Emotion" to see your audio spectrogram</p>
@@ -433,7 +442,7 @@ export default function Home() {
                         className="rounded-md shadow-sm"
                       />
                     </div>
-                    
+
                     {analysisResult && (
                       <div className="mt-4 text-center">
                         <h3 className="text-xl font-bold text-blue-600">
@@ -442,6 +451,11 @@ export default function Home() {
                         <p className="text-sm text-gray-500">
                           Match Confidence: {(analysisResult.confidence * 100).toFixed(1)}%
                         </p>
+                        {savedAudioPath && (
+                          <p className="text-xs text-gray-400 mt-2">
+                            Audio saved as: {savedAudioPath.split('/').pop()}
+                          </p>
+                        )}
                       </div>
                     )}
                   </>

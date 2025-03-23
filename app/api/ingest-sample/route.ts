@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { writeFile, mkdir, readFile, unlink } from "fs/promises"
+import { writeFile, mkdir, readFile, unlink, rename } from "fs/promises"
 import { join } from "path"
 import { randomUUID } from "crypto"
 import { exec } from "child_process"
@@ -25,6 +25,7 @@ export async function POST(request: NextRequest) {
     const formData = await request.formData()
     const audioFile = formData.get("audio") as File
     const label = formData.get("label") as string
+    const name = formData.get("name") as string || "Unknown"
 
     if (!audioFile || !label) {
       console.error("Missing audio file or label")
@@ -44,6 +45,10 @@ export async function POST(request: NextRequest) {
     const audioPath = join(tempDir, `${id}.webm`).replace(/\\/g, '/')
     const wavPath = join(tempDir, `${id}.wav`).replace(/\\/g, '/')
     const errorLogPath = join(tempDir, `${id}_error.log`).replace(/\\/g, '/')
+
+    // Create training directory if it doesn't exist
+    const trainingDir = join(process.cwd(), "audio_data", "training")
+    await ensureDir(trainingDir)
 
     console.log("Paths:", {
       tempDir,
@@ -68,6 +73,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Failed to convert audio format" }, { status: 500 })
     }
 
+    // Save the WAV file with the label and name
+    const finalAudioPath = join(trainingDir, `${label}_${name}_${id}.wav`).replace(/\\/g, '/')
+    await rename(wavPath, finalAudioPath)
+
     // Run the Python script to ingest the sample
     const pythonScript = `
 import sys
@@ -82,7 +91,7 @@ from speech_feature_extractor import HybridFeatureExtractor
 
 try:
     # Print debugging info
-    audio_path = '${wavPath}'  # Use the WAV file instead of WebM
+    audio_path = '${finalAudioPath}'  # Use the final WAV file path
     label = '${label}'
     database_path = os.path.join('${process.cwd().replace(/\\/g, '/')}', 'emotion_database')  # Path to our emotion database
     
@@ -130,7 +139,6 @@ except Exception as e:
       try {
         await Promise.all([
           unlink(audioPath),
-          unlink(wavPath),
           unlink(scriptPath),
           unlink(errorLogPath).catch(() => { })  // Error log might not exist
         ])
@@ -157,18 +165,10 @@ except Exception as e:
         success: true,
         message: "Sample successfully ingested",
       })
-    } catch (execError) {
-      // Check for error log even in case of execution error
-      if (existsSync(errorLogPath)) {
-        const errorLog = await readFile(errorLogPath, 'utf8')
-        console.error("Python error log:", errorLog)
-        return NextResponse.json({ error: `Python error: ${errorLog}` }, { status: 500 })
-      }
-
-      console.error("Python execution error:", execError)
-      console.error("Full error details:", JSON.stringify(execError, null, 2))
+    } catch (error) {
+      console.error("Python execution error:", error)
       return NextResponse.json(
-        { error: `Python execution failed: ${execError instanceof Error ? execError.message : String(execError)}` },
+        { error: `Python execution failed: ${error instanceof Error ? error.message : String(error)}` },
         { status: 500 }
       )
     }

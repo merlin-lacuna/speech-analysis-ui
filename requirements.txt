@@ -1,13 +1,15 @@
-numpy>=1.20.0
+numpy<2.0.0
 librosa>=0.9.0
 --find-links https://download.pytorch.org/whl/torch_stable.html
-torch>=1.9.0
-torchaudio>=1.9.0
+torch==2.2.2+cu121
+torchaudio==2.2.2+cu121
+torchvision==0.17.2+cu121
 soundfile>=0.10.3
 speechbrain>=0.5.12
-faiss-cpu>=1.7.2
+faiss-gpu
 scikit-learn>=0.24.2
 matplotlib>=3.4.0
 scipy>=1.7.0
 sounddevice>=0.4.6
-keyboard>=0.13.5 
+keyboard>=0.13.5
+cupy-cuda12x>=12.0.0 

@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from speech_feature_extractor import HybridFeatureExtractor
 from typing import Tuple, Dict, Optional
 from dataclasses import dataclass
+import json
 
 @dataclass
 class AnalysisResult:
@@ -20,27 +21,43 @@ class AudioProcessor:
         self.extractor = HybridFeatureExtractor()
         self.extractor.load_database('emotion_database')
 
-    def process_audio_file(self, audio_path: str, generate_spectrogram: bool = False, spectrogram_path: str = None) -> AnalysisResult:
-        """Process an audio file and return analysis results"""
-        # Generate spectrogram if requested
-        if generate_spectrogram and spectrogram_path:
-            self._generate_spectrogram(audio_path, spectrogram_path)
-        
-        # Get label and confidence
-        label, confidence = self.extractor.find_closest_match(audio_path)
-        
-        # Get features for debugging/display
-        features = self.extractor.extract_all_features(audio_path)
-        feature_dict = {
-            f"feature_{i}": float(val) for i, val in enumerate(features)
-        }
-        
-        return AnalysisResult(
-            label=label,
-            confidence=confidence,
-            features=feature_dict,
-            spectrogram_path=spectrogram_path if generate_spectrogram else None
-        )
+    def process_audio_file(self, audio_path: str, generate_spectrogram: bool = False, spectrogram_path: str = None) -> Dict:
+        """Process an audio file and return the results"""
+        try:
+            # Get the match result as JSON string
+            json_response = self.extractor.find_closest_match(audio_path)
+            
+            # Parse the JSON response
+            response_data = json.loads(json_response)
+            
+            # Initialize result dictionary
+            result = {
+                "success": True,
+                "logs": response_data.get("logs", "")
+            }
+            
+            # Add match result if available
+            match_result = response_data.get("result")
+            if match_result:
+                result["label"] = match_result["label"]
+                result["confidence"] = match_result["confidence"]
+            else:
+                result["success"] = False
+                result["error"] = "No match found"
+            
+            # Generate spectrogram if requested
+            if generate_spectrogram and spectrogram_path:
+                self._generate_spectrogram(audio_path, spectrogram_path)
+                result["spectrogram_path"] = spectrogram_path
+            
+            return result
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "logs": f"Error processing audio: {str(e)}"
+            }
 
     def ingest_sample(self, audio_path: str, label: str):
         """Add a new sample to the database"""

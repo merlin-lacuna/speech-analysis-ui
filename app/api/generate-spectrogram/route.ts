@@ -103,9 +103,9 @@ try:
     # Print results as JSON for parsing
     import json
     print("RESULT_JSON:" + json.dumps({
-        "emotion": result.label,
-        "confidence": float(result.confidence),
-        "features": result.features
+        "emotion": result["label"] if result["success"] else None,
+        "confidence": float(result["confidence"]) if result["success"] else 0.0,
+        "logs": result.get("logs", "")
     }))
 
 except Exception as e:
@@ -122,22 +122,22 @@ except Exception as e:
 
     // Execute the Python script using the venv Python path
     const pythonPath = join(process.cwd(), 'venv', process.platform === 'win32' ? 'Scripts' : 'bin', process.platform === 'win32' ? 'python.exe' : 'python')
-    
+
     try {
       const { stdout, stderr } = await execPromise(`"${pythonPath}" "${scriptPath}"`)
-      
+
       // Clean up temporary files
       try {
         await Promise.all([
           unlink(audioPath),
           unlink(wavPath),
           unlink(scriptPath),
-          unlink(errorLogPath).catch(() => {})  // Error log might not exist
+          unlink(errorLogPath).catch(() => { })  // Error log might not exist
         ])
       } catch (error) {
         console.warn("Failed to clean up some temporary files:", error)
       }
-      
+
       // Check for error log
       if (existsSync(errorLogPath)) {
         const errorLog = await readFile(errorLogPath, 'utf8')

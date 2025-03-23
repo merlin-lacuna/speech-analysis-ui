@@ -9,7 +9,6 @@ import Image from "next/image"
 interface EmotionAnalysis {
   emotion: string
   confidence: number
-  features: Record<string, number>
 }
 
 export default function AudioRecorder() {
@@ -97,30 +96,60 @@ export default function AudioRecorder() {
     console.log("Audio blob type:", audioBlob.type)
 
     try {
+      // First save the audio file and generate spectrogram
       const formData = new FormData()
       formData.append("audio", audioBlob)
-      console.log("Sending request to analyze audio...")
+      console.log("Saving audio file and generating spectrogram...")
 
-      const response = await fetch("/api/generate-spectrogram", {
+      const saveResponse = await fetch("/api/generate-spectrogram", {
         method: "POST",
         body: formData,
       })
 
-      console.log("Response status:", response.status)
-      const data = await response.json()
-      console.log("Response data:", data)
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to analyze audio")
+      if (!saveResponse.ok) {
+        throw new Error("Failed to save audio file")
       }
 
-      setSpectrogramUrl(data.spectrogramUrl)
-      setAnalysisResult({
-        emotion: data.emotion,
-        confidence: data.confidence,
-        features: data.features
+      const { audioPath, spectrogramUrl } = await saveResponse.json()
+      setSpectrogramUrl(spectrogramUrl)
+
+      // Now analyze the audio using our Python script
+      console.log("Analyzing audio with Python script...")
+      const analysisResponse = await fetch("/api/python", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          command: "match",
+          args: [audioPath]
+        }),
       })
-      console.log("Audio analysis completed successfully:", data.message)
+
+      if (!analysisResponse.ok) {
+        const error = await analysisResponse.json()
+        console.error("Python analysis error:", error)
+        throw new Error(error.error || "Failed to analyze audio")
+      }
+
+      const result = await analysisResponse.json()
+      console.log("Analysis result:", result)
+
+      if (result.result) {
+        setAnalysisResult({
+          emotion: result.result.label,
+          confidence: result.result.confidence
+        })
+        console.log("Audio analysis completed successfully")
+
+        // Log any debug information
+        if (result.logs) {
+          console.log("Analysis logs:", result.logs)
+        }
+      } else {
+        throw new Error("No result from analysis")
+      }
+
     } catch (error) {
       console.error("Error analyzing audio:", error)
       alert(`Error analyzing audio: ${error instanceof Error ? error.message : String(error)}`)
@@ -189,26 +218,38 @@ export default function AudioRecorder() {
             </div>
           )}
 
-          {analysisResult && (
+          {(analysisResult || spectrogramUrl) && (
             <div className="mt-6 space-y-4">
-              <div className="text-center">
-                <h3 className="text-2xl font-bold text-blue-600">
-                  {analysisResult.emotion.charAt(0).toUpperCase() + analysisResult.emotion.slice(1)}
-                </h3>
-                <p className="text-sm text-gray-500">
-                  Match Confidence: {(analysisResult.confidence * 100).toFixed(1)}%
-                </p>
-              </div>
-              
-              <div className="overflow-hidden border rounded-md">
-                <Image
-                  src={spectrogramUrl || "/placeholder.svg"}
-                  alt="Audio Spectrogram"
-                  width={400}
-                  height={300}
-                  className="w-full"
-                />
-              </div>
+              {analysisResult && (
+                <div className="text-center">
+                  {analysisResult.emotion ? (
+                    <>
+                      <h3 className={`text-2xl font-bold ${getEmotionColor(analysisResult.emotion)}`}>
+                        {analysisResult.emotion.charAt(0).toUpperCase() + analysisResult.emotion.slice(1)}
+                      </h3>
+                      <p className="text-sm text-gray-500">
+                        Match Confidence: {(analysisResult.confidence * 100).toFixed(1)}%
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-lg text-gray-600">
+                      No emotion detected. Please try recording again.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {spectrogramUrl && (
+                <div className="overflow-hidden border rounded-md">
+                  <Image
+                    src={spectrogramUrl}
+                    alt="Audio Spectrogram"
+                    width={400}
+                    height={300}
+                    className="w-full"
+                  />
+                </div>
+              )}
             </div>
           )}
         </CardContent>

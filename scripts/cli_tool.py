@@ -7,6 +7,13 @@ from audio_processor import AudioProcessor
 import time
 from threading import Event
 
+def check_sudo():
+    """Check if script is running with sudo privileges"""
+    if os.geteuid() != 0:
+        print("\nError: This script needs to be run with sudo privileges for keyboard access.")
+        print("Please run: sudo python scripts/cli_tool.py")
+        sys.exit(1)
+
 def beep(frequency=800, duration=0.2):
     """Platform-agnostic beep function"""
     if sys.platform == 'win32':
@@ -18,17 +25,29 @@ def beep(frequency=800, duration=0.2):
 
 class AudioCLI:
     def __init__(self):
+        print("Initializing AudioCLI...")
+        if sys.platform != 'win32':
+            print("Linux system detected, checking sudo privileges...")
+            check_sudo()
+            
         self.beep_freq = 800
         self.beep_duration = 0.2  # seconds
+        print("Initializing AudioProcessor...")
         self.processor = AudioProcessor()
         self.stop_recording = Event()
         
         # Check audio devices
-        self.devices = sd.query_devices()
-        print("\nAvailable audio devices:")
-        print(self.devices)
+        print("Querying audio devices...")
+        try:
+            self.devices = sd.query_devices()
+            print("\nAvailable audio devices:")
+            print(self.devices)
+        except Exception as e:
+            print(f"Error querying audio devices: {e}")
+            sys.exit(1)
         
         # Find default input device
+        print("Finding default input device...")
         try:
             self.default_input = sd.query_devices(kind='input')
             print(f"\nUsing input device: {self.default_input['name']}")
@@ -37,11 +56,17 @@ class AudioCLI:
             print(f"\nWarning: Could not get default input device: {e}")
             print("Please ensure you have a microphone connected and enabled.")
             # Try to find any input device
+            found_device = False
             for device in self.devices:
                 if device['max_input_channels'] > 0:
                     print(f"Falling back to input device: {device['name']}")
                     self.device_id = device['index']
+                    found_device = True
                     break
+            if not found_device:
+                print("No input devices found. Please connect a microphone.")
+                sys.exit(1)
+        print("AudioCLI initialization complete.")
         
     def beep(self):
         """Play a beep sound"""
